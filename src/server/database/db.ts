@@ -2,15 +2,20 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const dbPath = path.join(process.cwd(), 'database.db');
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'database.db');
+export const BACKUP_DIR = process.env.BACKUP_DIR || path.join(DATA_DIR, 'backups');
+
+// Ensure directories exist
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+export const dbPath = DB_PATH;
 const db = new Database(dbPath);
 
 // Enable WAL mode & foreign keys for high performance and integrity
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
-
-// Backup directory
-const BACKUP_DIR = path.join(process.cwd(), 'backups');
 
 function ensureBackupDir() {
   if (!fs.existsSync(BACKUP_DIR)) {

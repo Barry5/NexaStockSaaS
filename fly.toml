@@ -1,0 +1,23 @@
+# fly.toml — NexaStock SaaS on Fly.io
+app = "nexastock-saas"
+
+primary_region = "cdg"
+
+[build]
+  builder = "heroku/buildpacks:20"
+
+[env]
+  NODE_ENV = "production"
+  DATA_DIR = "/data"
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "nexastock_data"
+  destination = "/data"

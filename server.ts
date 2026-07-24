@@ -38,7 +38,7 @@ import syncRouter, { compileCompleteState } from './src/server/routes/sync.js';
 
 // Middlewares
 import { errorHandler } from './src/server/middleware/errorHandler.js';
-import { createBackup, getBackupList } from './src/server/database/db.js';
+import { createBackup, getBackupList, dbPath, BACKUP_DIR } from './src/server/database/db.js';
 import { requireRole } from './src/server/middleware/auth.js';
 import { authenticateToken as authenticate } from './src/server/middleware/auth.js';
 import { createBackupArchive, getBackupList as getBackupArchiveList, restoreBackupArchive } from './src/server/services/backupService.js';
@@ -144,7 +144,7 @@ app.post('/api/admin/backup', authenticate, requireRole(['superadmin']), (req, r
 app.post('/api/admin/backups/enterprise', authenticate, requireRole(['superadmin', 'owner', 'admin']), (req, res, next) => {
   try {
     const { label = 'Sauvegarde manuelle', strategy = 'full', destination = 'local', tenantId } = req.body || {};
-    const backup = createBackupArchive(path.join(process.cwd(), 'database.db'), {
+    const backup = createBackupArchive(dbPath, {
       label,
       strategy,
       destination,
@@ -227,7 +227,6 @@ app.post('/api/admin/backups/gdrive/upload', authenticate, requireRole(['superad
   try {
     const { label = 'Sauvegarde Drive', strategy = 'full' } = req.body || {};
     const tenantId = resolveTenantId(req);
-    const dbPath = path.join(process.cwd(), 'database.db');
     const { manifest, archivePath } = createBackupArchive(dbPath, { label, strategy, destination: 'remote', tenantId });
     const driveFileId = await uploadBackupToDrive(archivePath, manifest, tenantId);
     res.json({ success: true, manifest, driveFileId, tenantId });
@@ -239,10 +238,10 @@ app.post('/api/admin/backups/gdrive/restore', authenticate, requireRole(['supera
     const { manifestId } = req.body || {};
     if (!manifestId) return res.status(400).json({ error: 'manifestId requis.' });
     const tenantId = resolveTenantId(req);
-    const backupDir = path.join(process.cwd(), 'backups');
+    const backupDir = BACKUP_DIR;
     const { archivePath, manifest: dlManifest } = await downloadBackupFromDrive(manifestId, backupDir, tenantId);
     const manifestPath = path.join(backupDir, `${manifestId}.json`);
-    const destPath = path.join(process.cwd(), 'database.db');
+    const destPath = dbPath;
     const result = restoreBackupArchive(manifestPath, destPath);
     res.json({ success: true, result, tenantId });
   } catch (error) { next(error); }
