@@ -183,7 +183,7 @@ function AppShell() {
       vendeur: ['dashboard', 'pos', 'invoicing', 'settings'],
       comptable: ['dashboard', 'invoicing', 'commissions', 'expenses', 'settings'],
       'gestionnaire de stock': ['dashboard', 'products', 'ai', 'settings'],
-      superadmin: ['saasadmin'],
+      superadmin: ['saasadmin', 'settings'],
     };
     let allowedIds = roleMap[activeUser.role] || ['dashboard', 'invoicing', 'commissions', 'products', 'pos', 'crm', 'expenses', 'ai', 'users', 'rbac', 'settings'];
     const filtered = items.filter(item => {
