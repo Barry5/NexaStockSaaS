@@ -49,7 +49,7 @@ import {
 import { requireActiveTenant, requireModuleAccess } from './src/server/middleware/tenantAccess.js';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Security & PWA headers for all responses
 app.use((_req, res, next) => {
