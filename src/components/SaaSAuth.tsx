@@ -339,12 +339,7 @@ export default function SaaSAuth() {
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col justify-between text-white font-sans overflow-hidden">
       
-      {/* Top Marketing Strip */}
-      <div className="bg-gradient-to-r from-blue-600 to-indigo-700 py-2 px-4 text-center text-xs font-semibold tracking-wider flex items-center justify-center gap-2">
-        <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-        <span>Gérez vos stocks, POS, ventes et finances multi-boutiques en temps réel avec IA</span>
-        <ChevronRight className="w-3 h-3" />
-      </div>
+
 
       <div className="flex-1 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 items-center p-4 lg:p-8 gap-8">
         
