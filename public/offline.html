@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hors connexion - NexaStock</title>
+  <meta name="theme-color" content="#030712" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #030712;
+      color: #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .container {
+      text-align: center;
+      max-width: 400px;
+    }
+    .icon {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      border-radius: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      box-shadow: 0 8px 32px rgba(37,99,235,0.2);
+    }
+    .icon svg { width: 40px; height: 40px; }
+    h1 { font-size: 20px; font-weight: 800; margin-bottom: 8px; color: #f9fafb; }
+    p { font-size: 14px; color: #9ca3af; line-height: 1.6; }
+    .retry-btn {
+      display: inline-block;
+      margin-top: 24px;
+      padding: 12px 32px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .retry-btn:hover { background: #1d4ed8; }
+    .retry-btn:active { transform: scale(0.98); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+      </svg>
+    </div>
+    <h1>Vous êtes hors connexion</h1>
+    <p>NexaStock fonctionne avec des données en cache, mais certaines fonctionnalités nécessitent une connexion Internet. Veuillez vérifier votre connexion et réessayer.</p>
+    <button class="retry-btn" onclick="window.location.reload()">Réessayer</button>
+    <p style="margin-top: 16px; font-size: 12px; color: #4b5563;">Les données non synchronisées seront envoyées automatiquement dès que la connexion sera rétablie.</p>
+  </div>
+</body>
+</html>

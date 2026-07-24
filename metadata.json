@@ -1,0 +1,6 @@
+{
+  "name": "NexaStock",
+  "description": "Plateforme SaaS professionnelle de gestion de stock, ventes POS, dépenses, clients, fournisseurs et comptabilité avec IA",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
