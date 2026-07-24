@@ -486,6 +486,7 @@ export default function SaaSSettings() {
           createdAt: data.backup.manifest.createdAt,
           encrypted: data.backup.manifest.encrypted,
           size: data.backup.manifest.size,
+          manifestPath: data.backup.manifestPath,
         },
         ...prev,
       ]);
