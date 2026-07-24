@@ -99,6 +99,8 @@ export default function SaaSSettings() {
   const [backupLabel, setBackupLabel] = useState('Sauvegarde manuelle');
   const [backupStrategy, setBackupStrategy] = useState<'full' | 'incremental' | 'differential'>('full');
   const [backupDestination, setBackupDestination] = useState<'local' | 'remote'>('local');
+  const [localRestoring, setLocalRestoring] = useState(false);
+  const [localRestoreConfirm, setLocalRestoreConfirm] = useState<string | null>(null);
   const [gdriveConnected, setGdriveConnected] = useState(false);
   const [gdriveEmail, setGdriveEmail] = useState<string | null>(null);
   const [gdriveBackups, setGdriveBackups] = useState<any[]>([]);
@@ -491,6 +493,27 @@ export default function SaaSSettings() {
       addNotification(err.message || 'Erreur de sauvegarde', 'error');
     } finally {
       setBackupLoading(false);
+    }
+  };
+
+  const handleLocalRestore = async (manifestPath: string) => {
+    if (!isBackupAdmin || localRestoring) return;
+    setLocalRestoring(true);
+    const token = localStorage.getItem('nexastock_token');
+    try {
+      const res = await fetch('/api/admin/backups/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ manifestPath })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Échec de la restauration');
+      addNotification('Restauration réussie ! Rechargez la page.', 'success');
+      setLocalRestoreConfirm(null);
+    } catch (err: any) {
+      addNotification(err.message || 'Erreur de restauration', 'error');
+    } finally {
+      setLocalRestoring(false);
     }
   };
 
@@ -1616,6 +1639,18 @@ export default function SaaSSettings() {
                       <div className="text-[10px] text-gray-400 flex items-center gap-2">
                         <span className="px-2 py-0.5 rounded bg-gray-800">{item.encrypted ? 'ChiffrÃ©e' : 'Non chiffrÃ©e'}</span>
                         <span>{Math.round((item.size || 0) / 1024)} KB</span>
+                        {isBackupAdmin && (
+                          <>
+                            {localRestoreConfirm === item.manifestPath ? (
+                              <div className="flex gap-1">
+                                <button onClick={() => handleLocalRestore(item.manifestPath)} disabled={localRestoring} className="text-[10px] bg-red-600 hover:bg-red-500 text-white px-2 py-1 rounded transition">{localRestoring ? '...' : 'Confirmer'}</button>
+                                <button onClick={() => setLocalRestoreConfirm(null)} className="text-[10px] bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1 rounded transition">Annuler</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setLocalRestoreConfirm(item.manifestPath)} className="text-[10px] bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded transition">Restaurer</button>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
