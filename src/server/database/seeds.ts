@@ -157,7 +157,7 @@ export function seed(db: Database) {
         role: 'superadmin',
         tenantId: null,
         active: 1,
-        avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=80&h=80&fit=crop&q=80',
+        avatar: null,
         password: defaultPasswordHash,
         firstLoginReset: 0
       },
@@ -168,7 +168,7 @@ export function seed(db: Database) {
         role: 'gerant',
         tenantId: 't-pharma-saintjean',
         active: 1,
-        avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&q=80',
+        avatar: null,
         password: defaultPasswordHash,
         firstLoginReset: 0
       },
@@ -179,7 +179,7 @@ export function seed(db: Database) {
         role: 'vendeur',
         tenantId: 't-market-baraka',
         active: 1,
-        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&h=80&fit=crop&q=80',
+        avatar: null,
         password: defaultPasswordHash,
         firstLoginReset: 0
       }

@@ -41,7 +41,7 @@ router.post('/', authenticateToken, requireRole(['owner', 'admin', 'gerant']), a
       role || 'vendeur',
       tenantId,
       active === false ? 0 : 1,
-      avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=80&h=80&fit=crop&q=80',
+      avatar || '',
       defaultHashedPassword,
       firstLoginReset
     );

@@ -269,7 +269,7 @@ export default function SaaSAuth() {
       role: 'owner',
       tenantId: newTenantId,
       active: true,
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=80&h=80&fit=crop&q=80',
+      avatar: '',
       firstLoginReset: true
     };
 
