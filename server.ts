@@ -181,10 +181,25 @@ function resolveTenantId(req: any): string {
   return req.user?.tenantId || '__superadmin__';
 }
 
+// Debug: check Google env vars
+app.get('/api/debug/gdrive-env', (_req, res) => {
+  res.json({
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? `${process.env.GOOGLE_CLIENT_ID?.substring(0, 10)}...` : 'NON DEFINI',
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? `${process.env.GOOGLE_CLIENT_SECRET?.substring(0, 10)}...` : 'NON DEFINI',
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'NON DEFINI',
+    APP_URL: process.env.APP_URL || 'NON DEFINI',
+    NODE_ENV: process.env.NODE_ENV || 'NON DEFINI',
+  });
+});
+
 // Google Drive OAuth routes
 app.get('/api/admin/backups/gdrive/auth-url', authenticate, requireRole(['superadmin', 'owner', 'admin']), (req, res) => {
+  console.log('[GDRIVE] GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'SET' : 'UNDEFINED');
+  console.log('[GDRIVE] GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'SET' : 'UNDEFINED');
+  console.log('[GDRIVE] GOOGLE_REDIRECT_URI:', process.env.GOOGLE_REDIRECT_URI || 'UNDEFINED');
   const state = encodeURIComponent(JSON.stringify({ tenantId: resolveTenantId(req) }));
   const url = getAuthUrl() + `&state=${state}`;
+  console.log('[GDRIVE] Auth URL generated:', url.substring(0, 100) + '...');
   res.json({ url });
 });
 
