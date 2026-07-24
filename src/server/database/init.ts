@@ -9,6 +9,7 @@ import { up as up007 } from './migrations/007_delivery_notes.js';
 import { up as up008 } from './migrations/008_fix_sales_fk.js';
 import { up as up009 } from './migrations/009_gdrive_tokens.js';
 import { seed } from './seeds.js';
+import { importSnapshot } from './snapshot.js';
 
 export function initializeDatabase() {
   console.log('Starting SQLite database initialization sequence...');
@@ -25,6 +26,7 @@ export function initializeDatabase() {
     console.log('Tables created or already present.');
 
     seed(db);
+    importSnapshot();
     console.log('Database initialization completed successfully.');
   } catch (error) {
     console.error('Critical database initialization failure:', error);
