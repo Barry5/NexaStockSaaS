@@ -243,6 +243,27 @@ router.post('/reset-from-cloud', authenticateToken, requireRole(['superadmin']),
   }
 });
 
+// GET /api/sync/reset-app: ONE-CLICK reset — clear local + pull from Supabase + reload
+// Paste this URL in the browser address bar (cookie auth, no console needed)
+router.get('/reset-app', authenticateToken, requireRole(['superadmin']), async (req, res, next) => {
+  try {
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'sync_%'`).all() as { name: string }[];
+    for (const { name } of tables) db.prepare(`DELETE FROM ${name}`).run();
+
+    const pullResult = await syncService.fullPull();
+
+    res.json({
+      success: true,
+      tablesCleared: tables.length,
+      pulled: pullResult.pulled,
+      errors: pullResult.errors,
+      message: `SQLite vidé (${tables.length} tables), ${pullResult.pulled} enregistrements importés depuis Supabase`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/sync/clear-local: Clear all local SQLite data (no Supabase dependency)
 router.post('/clear-local', authenticateToken, requireRole(['superadmin']), (req, res) => {
   try {
