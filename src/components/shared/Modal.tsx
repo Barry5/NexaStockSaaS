@@ -18,7 +18,7 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 'max-w-md' 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className={`bg-gray-900 border border-gray-800 p-6 rounded-2xl ${maxWidth} w-full`}
+            className={`bg-gray-900 border border-gray-800 p-6 rounded-2xl ${maxWidth} w-full modal-responsive`}
           >
             {title && (
               <div className="flex justify-between items-center pb-3 border-b border-gray-800 mb-4">

@@ -335,7 +335,7 @@ function InvoiceDetail({ invoiceId, onBack }: { invoiceId: string; onBack: () =>
       </div>
 
       {activeTab === 'items' && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden overflow-x-auto">
           <table className="w-full text-xs">
             <thead><tr className="bg-gray-950 text-gray-500 text-[10px] uppercase tracking-wider">
               <th className="text-left p-3">Article</th>
@@ -451,7 +451,7 @@ function DeliveryTab({ invoice, onUpdate, formatted }: { invoice: Invoice; onUpd
           </div>
           <p className="text-[10px] text-gray-500 mb-2 font-mono">Créé le {formatDate(do_.createdAt)}{do_.validatedAt ? ` | Validé le ${formatDate(do_.validatedAt)}` : ''}{do_.cancelledAt ? ` | Annulé le ${formatDate(do_.cancelledAt)}` : ''}{do_.deliveryDate ? ` | Livré le ${formatDate(do_.deliveryDate)}` : ''}</p>
           {do_.notes && <p className="text-[10px] text-gray-400 mb-2 italic">{do_.notes}</p>}
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto"><table className="w-full text-xs">
             <thead><tr className="text-gray-500 text-[10px] uppercase tracking-wider">
               <th className="text-left py-1">Article</th>
               <th className="text-center py-1">Qté</th>
@@ -468,7 +468,7 @@ function DeliveryTab({ invoice, onUpdate, formatted }: { invoice: Invoice; onUpd
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </div>
       ))}
     </div>
@@ -482,7 +482,7 @@ function PaymentsTab({ invoice, formatted }: { invoice: Invoice; formatted: (v: 
       {payments.length === 0 ? (
         <div className="text-center py-8 text-gray-500">Aucun paiement enregistré</div>
       ) : (
-        <table className="w-full text-xs">
+        <div className="overflow-x-auto"><table className="w-full text-xs">
           <thead><tr className="text-gray-500 text-[10px] uppercase tracking-wider">
             <th className="text-left p-2">Date</th>
             <th className="text-left p-2">Méthode</th>
@@ -510,7 +510,7 @@ function PaymentsTab({ invoice, formatted }: { invoice: Invoice; formatted: (v: 
               <td colSpan={2} />
             </tr>
           </tfoot>
-        </table>
+        </table></div>
       )}
     </div>
   );
@@ -529,7 +529,7 @@ function ReturnsTab({ invoice, formatted }: { invoice: Invoice; formatted: (v: n
             <StatusBadge status={ret.status} labels={{ draft: 'Brouillon', validated: 'Validé', cancelled: 'Annulé' }} />
           </div>
           <p className="text-[10px] text-gray-500 font-mono">{formatDate(ret.date)}{ret.reason ? ` | Motif: ${ret.reason}` : ''}</p>
-          <table className="w-full text-xs mt-2">
+          <div className="overflow-x-auto"><table className="w-full text-xs mt-2">
             <thead><tr className="text-gray-500 text-[10px] uppercase tracking-wider">
               <th className="text-left py-1">Article</th>
               <th className="text-center py-1">Qté</th>
@@ -544,7 +544,7 @@ function ReturnsTab({ invoice, formatted }: { invoice: Invoice; formatted: (v: n
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </div>
       ))}
     </div>
@@ -896,7 +896,7 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
           </button>
         </div>
         {items.map((item, idx) => (
-          <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-gray-950 rounded-lg p-3 border border-gray-800">
+          <div className="overflow-x-auto"><div key={idx} className="grid grid-cols-12 gap-2 items-center bg-gray-950 rounded-lg p-3 border border-gray-800">
             <div className="col-span-4">
               <select value={item.productId} onChange={e => handleItemChange(idx, 'productId', e.target.value)} className="w-full bg-gray-900 border border-gray-800 rounded-lg p-2 text-xs text-white">
                 <option value="">Sélectionner</option>
@@ -918,7 +918,7 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
             <div className="col-span-1">
               <button onClick={() => handleRemoveItem(idx)} className="p-1.5 hover:bg-red-500/10 rounded text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
             </div>
-          </div>
+          </div></div>
         ))}
         {items.length === 0 && (
           <div className="text-center py-8 text-gray-500 text-xs">Cliquez sur "Ajouter" pour ajouter des articles</div>

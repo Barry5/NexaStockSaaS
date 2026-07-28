@@ -154,7 +154,7 @@ export default function POSVente(props: POSVenteProps) {
         </div>
 
         {/* Clicking Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 max-h-[580px] overflow-y-auto pr-1">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3.5 max-h-[580px] overflow-y-auto pr-1">
           {filteredProducts.map(p => {
             const qtyLeft = p.quantity;
             const isLow = qtyLeft <= p.alertThreshold;

@@ -47,7 +47,7 @@ interface RestoreOptions {
   password?: string;
 }
 
-const DEFAULT_PASSWORD = 'nexastock-backup-key';
+const DEFAULT_PASSWORD = process.env.BACKUP_ENCRYPTION_KEY || 'nexastock-backup-key';
 const BACKUP_VERSION = 1;
 
 function ensureBackupDir(backupDir?: string) {
@@ -63,16 +63,19 @@ function createChecksum(buffer: Buffer) {
 function encryptBuffer(buffer: Buffer, password: string) {
   const iv = crypto.randomBytes(16);
   const key = crypto.createHash('sha256').update(password).digest();
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
-  return Buffer.concat([iv, encrypted]);
+  const authTag = cipher.getAuthTag();
+  return Buffer.concat([iv, authTag, encrypted]);
 }
 
 function decryptBuffer(buffer: Buffer, password: string) {
   const iv = buffer.subarray(0, 16);
-  const payload = buffer.subarray(16);
+  const authTag = buffer.subarray(16, 32);
+  const payload = buffer.subarray(32);
   const key = crypto.createHash('sha256').update(password).digest();
-  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(payload), decipher.final()]);
 }
 

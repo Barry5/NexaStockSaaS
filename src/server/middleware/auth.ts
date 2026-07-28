@@ -27,6 +27,11 @@ function extractToken(req: AuthenticatedRequest): string | null {
     return fallbackHeader.trim() || null;
   }
 
+  const cookie = req.cookies?.['nexastock_token'];
+  if (typeof cookie === 'string' && cookie.length > 0) {
+    return cookie;
+  }
+
   return null;
 }
 

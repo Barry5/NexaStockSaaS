@@ -164,3 +164,275 @@ body {
 .pulse-soft {
   animation: pulse-soft 3s infinite ease-in-out;
 }
+
+/* ============================================
+   RESPONSIVE UTILITIES — Mobile First
+   Activated only at breakpoints — never change desktop visuals
+   ============================================ */
+
+/* Prevent horizontal overflow on all screen sizes */
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+#root {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+/* Fluid content area: fills remaining width */
+.content-area {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Responsive table wrapper — horizontal scroll on small screens */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Responsive grid: auto-fill columns based on container width */
+.grid-responsive {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+}
+
+.grid-responsive-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+}
+
+/* Modal: full width on mobile, centered on desktop */
+.modal-responsive {
+  width: 100%;
+  max-width: 100%;
+}
+
+@media (min-width: 640px) {
+  .modal-responsive {
+    width: auto;
+    max-width: 90vw;
+  }
+}
+
+@media (min-width: 1024px) {
+  .modal-responsive {
+    max-width: 80vw;
+  }
+}
+
+/* Responsive card: no fixed width, fills container */
+.card-fluid {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Stack elements vertically on mobile, row on desktop */
+.stack-mobile {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 768px) {
+  .stack-mobile {
+    flex-direction: row;
+  }
+}
+
+/* Hide on mobile, show on desktop */
+.hide-mobile {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .hide-mobile {
+    display: revert;
+  }
+}
+
+/* Show on mobile, hide on desktop */
+.show-mobile {
+  display: revert;
+}
+
+@media (min-width: 768px) {
+  .show-mobile {
+    display: none;
+  }
+}
+
+/* Responsive padding that scales down on mobile */
+.p-responsive {
+  padding: 1rem;
+}
+
+@media (min-width: 640px) {
+  .p-responsive {
+    padding: 1.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .p-responsive {
+    padding: 2rem;
+  }
+}
+
+/* Responsive gap */
+.gap-responsive {
+  gap: 0.75rem;
+}
+
+@media (min-width: 768px) {
+  .gap-responsive {
+    gap: 1rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .gap-responsive {
+    gap: 1.5rem;
+  }
+}
+
+/* Image/avatar: responsive sizing */
+.img-responsive {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Form inputs: full width on mobile */
+.input-full {
+  width: 100%;
+}
+
+@media (min-width: 640px) {
+  .input-full {
+    width: auto;
+  }
+}
+
+/* Stats card grid: responsive columns */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 480px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 768px) {
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .stats-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Dashboard grid: responsive bento layout */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1280px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Chart containers: responsive sizing */
+.chart-container {
+  width: 100%;
+  min-height: 250px;
+}
+
+@media (min-width: 768px) {
+  .chart-container {
+    min-height: 300px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .chart-container {
+    min-height: 350px;
+  }
+}
+
+/* Sidebar: responsive adjustments */
+@media (max-width: 1023px) {
+  .sidebar-overlay {
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+  }
+}
+
+/* Tab navigation: scrollable on mobile */
+.tabs-scrollable {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tabs-scrollable::-webkit-scrollbar {
+  display: none;
+}
+
+/* Button group: responsive sizing */
+.btn-responsive {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .btn-responsive {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* Search input: fluid width */
+.search-fluid {
+  width: 100%;
+  max-width: 100%;
+}
+
+@media (min-width: 640px) {
+  .search-fluid {
+    width: auto;
+    min-width: 200px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .search-fluid {
+    min-width: 280px;
+  }
+}

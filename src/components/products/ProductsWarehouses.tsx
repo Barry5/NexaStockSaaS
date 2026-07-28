@@ -27,7 +27,7 @@ export default function ProductsWarehouses({ tenantWarehouses, organizationName,
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         {tenantWarehouses.length > 0 ? (
           tenantWarehouses.map(wh => (
             <div key={wh.id} className="bg-gray-900 border border-gray-850 p-5 rounded-2xl space-y-4 relative overflow-hidden group hover:border-gray-700 transition">

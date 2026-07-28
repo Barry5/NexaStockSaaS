@@ -82,7 +82,7 @@ function DashboardView({ onNavigate }: { onNavigate: (tab: string, id?: string) 
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div><h1 className="text-lg font-bold text-white">Bons de Livraison</h1><p className="text-xs text-gray-500">Gestion des livraisons et expéditions</p></div>
-        <button onClick={() => onNavigate('create')} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Nouveau BL</button>
+        <button onClick={() => onNavigate('create')} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 btn-responsive"><Plus className="w-3.5 h-3.5" /> Nouveau BL</button>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -150,11 +150,11 @@ function DeliveryNoteList({ onNavigate }: { onNavigate: (tab: string, id?: strin
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div><h2 className="text-lg font-bold text-white">Tous les BL</h2><p className="text-xs text-gray-500">{rows.length} résultat(s)</p></div>
-        <button onClick={() => onNavigate('create')} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Nouveau BL</button>
+        <button onClick={() => onNavigate('create')} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 btn-responsive"><Plus className="w-3.5 h-3.5" /> Nouveau BL</button>
       </div>
 
       <div className="flex gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
+        <div className="relative flex-1 min-w-[200px] max-w-sm search-fluid">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="BL, facture, client, chauffeur..." className="w-full bg-gray-900 border border-gray-800 rounded-lg pl-9 pr-3 py-2 text-xs text-white" />
         </div>
@@ -170,7 +170,7 @@ function DeliveryNoteList({ onNavigate }: { onNavigate: (tab: string, id?: strin
       </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-        <div className="max-h-[600px] overflow-y-auto">
+        <div className="max-h-[600px] overflow-y-auto table-responsive">
           <table className="w-full text-[10px]">
             <thead className="sticky top-0 bg-gray-950">
               <tr className="text-gray-500 uppercase tracking-wider">
@@ -363,9 +363,9 @@ function CreateDeliveryNote({ onBack, onCreated }: { onBack: () => void; onCreat
         </div>
 
         <div className="flex gap-2 justify-end pt-2">
-          <button onClick={onBack} className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold px-4 py-2 rounded-lg">Annuler</button>
+          <button onClick={onBack} className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold px-4 py-2 rounded-lg btn-responsive">Annuler</button>
           <button onClick={handleSave} disabled={saving || !selectedInvoice || totalQty <= 0}
-            className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-1">
+            className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-1 btn-responsive">
             {saving ? 'Création...' : <><Plus className="w-3.5 h-3.5" /> Créer le BL</>}
           </button>
         </div>
@@ -472,12 +472,12 @@ function DeliveryNoteDetail({ id, onBack, onUpdated }: { id: string; onBack: () 
         <div className="flex gap-2 flex-wrap">
           {statusActions.map(a => (
             <button key={a.key} onClick={() => handleAction(a.key)}
-              className={`${a.color} text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 transition`}>
+              className={`${a.color} text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 transition btn-responsive`}>
               <a.icon className="w-3.5 h-3.5" /> {a.label}
             </button>
           ))}
           <button onClick={() => window.open(`/api/delivery-notes/${id}/print`, '_blank')}
-            className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1"><Printer className="w-3.5 h-3.5" /> Imprimer</button>
+            className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 btn-responsive"><Printer className="w-3.5 h-3.5" /> Imprimer</button>
         </div>
       )}
 
@@ -530,7 +530,7 @@ function DeliveryNoteDetail({ id, onBack, onUpdated }: { id: string; onBack: () 
         </>
       )}
 
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden table-responsive">
         <div className="px-4 py-3 border-b border-gray-800"><h3 className="text-xs font-bold text-gray-300 uppercase font-mono">Produits livrés</h3></div>
         <table className="w-full text-[10px]">
           <thead className="bg-gray-950 text-gray-500 uppercase tracking-wider">
@@ -584,7 +584,7 @@ export default function DeliveryNotes() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-1 overflow-x-auto pb-1">
+      <div className="flex gap-1 overflow-x-auto pb-1 tabs-scrollable">
         {(['dashboard', 'list'] as string[]).map(t => (
           <button key={t} onClick={() => handleNavigate(t)}
             className={`px-4 py-2 text-xs font-bold rounded-lg whitespace-nowrap transition ${

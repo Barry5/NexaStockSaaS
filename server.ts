@@ -15,6 +15,13 @@ dotenv.config();
 import { initializeDatabase } from './src/server/database/init.js';
 initializeDatabase();
 
+// Initialize Sync Service (background sync to Supabase)
+import { syncService } from './src/server/sync/syncService.js';
+syncService.initialize().then(() => {
+  syncService.startBackgroundSync(300000);
+  console.log('[SERVER] Sync service initialized and background sync started');
+});
+
 // Import Router Modules
 import authRouter from './src/server/routes/auth.js';
 import productsRouter from './src/server/routes/products.js';
@@ -41,6 +48,7 @@ import { errorHandler } from './src/server/middleware/errorHandler.js';
 import { createBackup, getBackupList, dbPath, BACKUP_DIR } from './src/server/database/db.js';
 import { requireRole } from './src/server/middleware/auth.js';
 import { authenticateToken as authenticate } from './src/server/middleware/auth.js';
+import { migrationService } from './src/server/services/migrationService.js';
 import { createBackupArchive, getBackupList as getBackupArchiveList, restoreBackupArchive } from './src/server/services/backupService.js';
 import {
   getAuthUrl, exchangeCodeForTokens, loadStoredTokens, revokeTokens,
@@ -63,8 +71,11 @@ app.use((_req, res, next) => {
   next();
 });
 
+import cookieParser from 'cookie-parser';
+
 // Configure body-parser limits for base64 file attachments
 app.use(express.json({ limit: '50mb' }));
+app.use(cookieParser());
 
 // PWA routes — serve from dist with correct MIME types (works in both dev & prod)
 app.get('/sw.js', (_req, res) => {
@@ -111,6 +122,10 @@ app.use('/api/rbac', rbacRouter);
 
 // Multi-tenant Module Routes
 app.use('/api/modules', modulesRouter);
+
+// Affiliate Portal (restricted to affiliate role only)
+import affiliatePortalRouter from './src/server/routes/affiliatePortal.js';
+app.use('/api/affiliate-portal', affiliatePortalRouter);
 
 // Sync and Compatibility routes (supporting existing front-end calls)
 app.use('/api/sync', syncRouter);
@@ -172,6 +187,20 @@ app.get('/api/admin/backups/enterprise', authenticate, requireRole(['superadmin'
   } catch (error) {
     next(error);
   }
+});
+
+// Migration endpoint (superadmin only)
+app.post('/api/admin/migrate', authenticate, requireRole(['superadmin']), async (req, res, next) => {
+  try {
+    const result = await migrationService.migrateAll();
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/migrate/progress', authenticate, requireRole(['superadmin']), (req, res) => {
+  res.json({ progress: migrationService.getProgress() });
 });
 
 // Helper to resolve tenantId from request: body/query for superadmin, JWT for regular users

@@ -20,6 +20,9 @@ import {
 import type { Expense, Loan, Repayment, LoanInstallment } from '../types';
 import { useDB, useApp } from '../context';
 import { ConfirmDialog } from './shared/ConfirmDialog';
+import ExpenseList from './expenses/ExpenseList';
+import LoansList from './expenses/LoansList';
+import Repayments from './expenses/Repayments';
 
 export default function Expenses() {
   const { db, handleUpdateExpenses, handleUpdateLoans } = useDB();
@@ -451,7 +454,7 @@ export default function Expenses() {
       </div>
 
       {/* Sub Tabs Toggle */}
-      <div className="flex border-b border-gray-800">
+      <div className="flex border-b border-gray-800 tabs-scrollable">
         <button
           onClick={() => setActiveSubTab('expenses')}
           className={`px-5 py-2.5 text-xs font-semibold border-b-2 transition ${
@@ -566,460 +569,39 @@ export default function Expenses() {
 
       {/* Main Tab View: Sorties d'Argent Expense Ledger */}
       {activeSubTab === 'expenses' && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-800 bg-gray-950/20">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-300">Registre Historique des Dépenses</h3>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-gray-950 text-gray-400 font-mono text-[10px] uppercase border-b border-gray-800">
-                <tr>
-                  <th className="p-4">Désignation & Motif</th>
-                  <th className="p-4">Montant</th>
-                  <th className="p-4">Catégorie</th>
-                  <th className="p-4">Bénéficiaire</th>
-                  <th className="p-4">Règlement</th>
-                  <th className="p-4">Date</th>
-                  <th className="p-4">Justificatif</th>
-                  <th className="p-4">Statut</th>
-                  <th className="p-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-850">
-                {tenantExpenses.length > 0 ? (
-                  tenantExpenses.slice().reverse().map(exp => (
-                    <tr key={exp.id} className="hover:bg-gray-950/40 transition">
-                      <td className="p-4">
-                        <p className="font-bold text-gray-200">{exp.title}</p>
-                        {exp.description && <p className="text-[10px] text-gray-500 mt-0.5">{exp.description}</p>}
-                      </td>
-                      <td className="p-4 font-mono font-semibold text-white">{formattedCurrency(exp.amount)}</td>
-                      <td className="p-4">
-                        <span className="bg-gray-800 text-gray-300 px-2 py-0.5 rounded text-[10px] font-medium inline-flex items-center gap-1">
-                          <Tag className="w-3 h-3 text-brand-blue" /> {exp.category}
-                        </span>
-                      </td>
-                      <td className="p-4 text-gray-300">{exp.recipient || 'N/A'}</td>
-                      <td className="p-4 text-gray-400 font-mono text-[10px]">{exp.paymentMethod}</td>
-                      <td className="p-4 text-gray-400 font-mono">{exp.date}</td>
-                      <td className="p-4">
-                        {exp.attachment ? (
-                          <span className="text-[10px] font-semibold text-brand-blue hover:underline cursor-pointer flex items-center gap-1">
-                            <FileText className="w-3.5 h-3.5" /> justificatif.pdf
-                          </span>
-                        ) : (
-                          <span className="text-[10px] text-gray-600 italic">Aucun</span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        {exp.status === 'paye' ? (
-                          <span className="bg-emerald-500/10 text-brand-green px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-500/10 inline-flex items-center gap-1">
-                            <CheckCircle className="w-3 h-3" /> PAYÉ
-                          </span>
-                        ) : (
-                          <span className="bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded text-[10px] font-bold border border-amber-500/15 inline-flex items-center gap-1">
-                            <Clock className="w-3 h-3" /> ATTENTE
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-4 text-right">
-                        <button 
-                          onClick={() => handleDeleteExpense(exp.id)}
-                          className="p-1.5 hover:bg-red-950 hover:text-red-400 rounded-lg text-gray-500 transition"
-                          title="Supprimer la dépense"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={9} className="text-center py-12 text-gray-500">
-                      Aucune dépense enregistrée dans cette boutique.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ExpenseList
+          expenses={tenantExpenses}
+          formattedCurrency={formattedCurrency}
+          onDeleteExpense={handleDeleteExpense}
+        />
       )}
 
       {/* Main Tab View: Prêts & Dettes Loans Ledger */}
       {activeSubTab === 'loans' && (
-        <div className="space-y-4">
-          {tenantLoans.length > 0 ? (
-            tenantLoans.slice().reverse().map(loan => {
-              const isExpanded = expandedLoanId === loan.id;
-              const isEntrant = loan.type === 'entrant'; // borrowed
-
-              return (
-                <div 
-                  key={loan.id} 
-                  className={`bg-gray-900 border rounded-2xl overflow-hidden transition ${
-                    loan.status === 'rembourse' ? 'border-gray-800 opacity-80' : isEntrant ? 'border-red-500/10' : 'border-emerald-500/10'
-                  }`}
-                >
-                  {/* Summary row */}
-                  <div 
-                    onClick={() => setExpandedLoanId(isExpanded ? null : loan.id)}
-                    className="p-4.5 flex flex-col sm:flex-row justify-between sm:items-center gap-4 cursor-pointer hover:bg-gray-950/20 transition"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2.5 rounded-xl border ${
-                        isEntrant 
-                          ? 'bg-red-500/10 border-red-500/10 text-red-400' 
-                          : 'bg-emerald-500/10 border-emerald-500/10 text-brand-green'
-                      }`}>
-                        {isEntrant ? <ArrowDownRight className="w-5 h-5" /> : <ArrowUpRight className="w-5 h-5" />}
-                      </div>
-
-                      <div>
-                        <h3 className="text-sm font-bold text-gray-200">
-                          {isEntrant ? 'Emprunt contracté' : 'Fonds prêtés'} • {loan.partnerName}
-                        </h3>
-                        <p className="text-[10px] text-gray-500 font-mono mt-0.5">
-                          Initial: {formattedCurrency(loan.amount)} | Contracté le : {loan.date}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-5 justify-between sm:justify-start">
-                      <div className="text-left sm:text-right">
-                        <span className="text-[9px] text-gray-500 block uppercase font-mono">Solde restant dû</span>
-                        <span className={`text-sm font-mono font-bold ${
-                          loan.status === 'rembourse' ? 'text-gray-400 line-through' : isEntrant ? 'text-red-400' : 'text-brand-green'
-                        }`}>
-                          {formattedCurrency(loan.remainingBalance)}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        {loan.status === 'rembourse' ? (
-                          <span className="bg-emerald-500/10 text-brand-green text-[9px] font-bold px-2 py-0.5 rounded border border-emerald-500/10 uppercase tracking-wider">
-                            Remboursé
-                          </span>
-                        ) : (
-                          <span className="bg-amber-500/10 text-amber-500 text-[9px] font-bold px-2 py-0.5 rounded border border-amber-500/15 uppercase tracking-wider">
-                            Actif
-                          </span>
-                        )}
-                        
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteLoan(loan.id);
-                          }}
-                          className="p-1.5 hover:bg-red-950 hover:text-red-400 rounded-lg text-gray-500 transition"
-                          title="Supprimer ce dossier"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-
-                        {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Expandable Repayments details and action */}
-                  {isExpanded && (
-                    <motion.div 
-                      initial={{ height: 0 }}
-                      animate={{ height: 'auto' }}
-                      className="border-t border-gray-800 bg-gray-950/60 p-4.5 space-y-4"
-                    >
-                      <div className="flex justify-between items-center">
-                        <h4 className="text-xs font-semibold text-gray-400">Historique des remboursements</h4>
-                        {loan.status === 'actif' && (
-                          <button
-                            onClick={() => handleOpenRepayment(loan)}
-                            className="bg-brand-blue hover:bg-blue-600 text-white font-semibold text-[10px] px-2.5 py-1.5 rounded-lg transition"
-                          >
-                            Ajouter un remboursement
-                          </button>
-                        )}
-                      </div>
-
-                      {loan.repayments.length > 0 ? (
-                        <div className="space-y-2">
-                          {loan.repayments.map(rep => (
-                            <div key={rep.id} className="flex justify-between items-center bg-gray-900 border border-gray-800 p-2.5 rounded-xl text-xs font-mono">
-                              <div>
-                                <p className="font-semibold text-gray-200">Remboursement de {formattedCurrency(rep.amount)}</p>
-                                <p className="text-[10px] text-gray-500 mt-0.5">{rep.note} | Date : {rep.date}</p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-[10px] text-emerald-400 bg-emerald-500/5 px-2 py-0.5 rounded border border-emerald-500/10">Validé</span>
-                                <button
-                                  onClick={() => handleDeleteRepayment(loan.id, rep.id)}
-                                  className="p-1 hover:bg-red-950 hover:text-red-400 rounded transition text-gray-500"
-                                  title="Annuler ce versement"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-gray-500 italic py-2 text-center">Aucun versement n'a encore été comptabilisé sur ce dossier financier.</p>
-                      )}
-
-                      {loan.description && (
-                        <div className="bg-gray-900/40 p-3 rounded-lg text-xs text-gray-400 border border-gray-800">
-                          <strong>Note de contrat :</strong> {loan.description}
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
-                </div>
-              );
-            })
-          ) : (
-            <div className="py-16 text-center bg-gray-900 border border-gray-800 rounded-2xl">
-              <Briefcase className="w-12 h-12 text-gray-700 mx-auto mb-3" />
-              <p className="text-sm font-semibold text-gray-400">Aucun emprunt ni prêt actif</p>
-              <p className="text-xs text-gray-500 mt-1">Utilisez l'enregistreur de prêts pour suivre vos contrats financiers.</p>
-            </div>
-          )}
-        </div>
+        <LoansList
+          loans={tenantLoans}
+          expandedLoanId={expandedLoanId}
+          onToggleExpand={setExpandedLoanId}
+          formattedCurrency={formattedCurrency}
+          onDeleteLoan={handleDeleteLoan}
+          onOpenRepayment={handleOpenRepayment}
+          onDeleteRepayment={handleDeleteRepayment}
+        />
       )}
 
       {/* Main Tab View: Gestion des Remboursements (Prêts Accordés) */}
       {activeSubTab === 'repayments' && (
-        <div className="space-y-6">
-          <div className="bg-gray-900 border border-gray-800 p-5 rounded-2xl">
-            <h2 className="text-sm font-bold text-gray-200">Gestion des remboursements (Créances et Prêts Accordés)</h2>
-            <p className="text-xs text-gray-400 mt-1">
-              Ce module liste tous les prêts accordés par votre entreprise à des partenaires extérieurs ou employés (fonds sortants). 
-              Planifiez des échéances de remboursement précises, suivez les versements et clôturez les dossiers une fois intégralement réglés.
-            </p>
-          </div>
-
-          {tenantLoans.filter(l => l.type === 'sortant').length > 0 ? (
-            <div className="space-y-6">
-              {tenantLoans.filter(l => l.type === 'sortant').slice().reverse().map(loan => {
-                const totalRepaid = loan.repayments.reduce((sum, r) => sum + r.amount, 0);
-                const percentRepaid = Math.min(100, Math.round((totalRepaid / loan.amount) * 100)) || 0;
-                const installments = loan.installments || [];
-
-                return (
-                  <div 
-                    key={loan.id} 
-                    className={`bg-gray-900 border rounded-2xl overflow-hidden p-5 space-y-5 transition ${
-                      loan.status === 'rembourse' ? 'border-gray-850 opacity-85' : 'border-gray-800'
-                    }`}
-                  >
-                    {/* Top Row: Information & Status */}
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-800 pb-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="p-1.5 bg-emerald-500/10 border border-emerald-500/10 text-brand-green rounded-lg">
-                            <ArrowUpRight className="w-4 h-4" />
-                          </span>
-                          <h3 className="text-base font-bold text-white">
-                            Prêt accordé à : {loan.partnerName}
-                          </h3>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1 font-mono">
-                          ID: {loan.id} • Date de versement : {loan.date} • Capital initial : {formattedCurrency(loan.amount)}
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        {loan.status === 'rembourse' ? (
-                          <span className="bg-emerald-500/10 text-brand-green text-[10px] font-bold px-3 py-1 rounded border border-emerald-500/20 uppercase tracking-wider flex items-center gap-1">
-                            <CheckCircle className="w-3.5 h-3.5" /> Soldé (Remboursé)
-                          </span>
-                        ) : (
-                          <span className="bg-amber-500/10 text-amber-500 text-[10px] font-bold px-3 py-1 rounded border border-amber-500/20 uppercase tracking-wider flex items-center gap-1">
-                            <Clock className="w-3.5 h-3.5" /> Actif (En cours)
-                          </span>
-                        )}
-                        <button
-                          onClick={() => handleDeleteLoan(loan.id)}
-                          className="p-1.5 bg-red-950/20 hover:bg-red-950 hover:text-red-400 rounded-lg text-gray-500 transition"
-                          title="Supprimer ce dossier"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Progress block */}
-                    <div className="bg-gray-950/40 p-4 rounded-xl space-y-2">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-400 font-medium">Progression du remboursement</span>
-                        <span className="font-mono font-bold text-emerald-400">{percentRepaid}% ({formattedCurrency(totalRepaid)} remboursés)</span>
-                      </div>
-                      <div className="w-full bg-gray-850 h-2.5 rounded-full overflow-hidden">
-                        <div 
-                          className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-                          style={{ width: `${percentRepaid}%` }}
-                        />
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-mono text-gray-500 pt-1">
-                        <span>Lancement : {loan.date}</span>
-                        <span>Solde restant dû : <strong className="text-amber-500">{formattedCurrency(loan.remainingBalance)}</strong></span>
-                      </div>
-                    </div>
-
-                    {/* Bento Split: Installments and Real Payments */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                      {/* Left side: Échéancier (Installments) */}
-                      <div className="bg-gray-950/20 border border-gray-850 p-4 rounded-xl space-y-3">
-                        <div className="flex justify-between items-center pb-2 border-b border-gray-850">
-                          <div className="flex items-center gap-1.5">
-                            <Calendar className="w-4 h-4 text-brand-blue" />
-                            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-300">Échéancier de Remboursement</h4>
-                          </div>
-                          {loan.status === 'actif' && (
-                            <button
-                              onClick={() => handleOpenInstallmentModal(loan)}
-                              className="text-[10px] font-semibold bg-brand-blue/10 hover:bg-brand-blue text-brand-blue hover:text-white px-2 py-1 rounded transition flex items-center gap-1"
-                            >
-                              <Plus className="w-3 h-3" /> Ajouter échéance
-                            </button>
-                          )}
-                        </div>
-
-                        {installments.length > 0 ? (
-                          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                            {installments.map(inst => (
-                              <div 
-                                key={inst.id} 
-                                className={`p-2.5 rounded-xl text-xs flex justify-between items-center border ${
-                                  inst.status === 'paye' 
-                                    ? 'bg-emerald-950/10 border-emerald-950/20 opacity-75' 
-                                    : 'bg-gray-900 border-gray-800'
-                                }`}
-                              >
-                                <div>
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="font-semibold text-gray-200">
-                                      {formattedCurrency(inst.amount)}
-                                    </span>
-                                    {inst.note && <span className="text-[10px] text-gray-500">({inst.note})</span>}
-                                  </div>
-                                  <p className="text-[10px] text-gray-500 mt-0.5">
-                                    Échéance : <span className="font-mono font-semibold">{inst.dueDate}</span>
-                                    {inst.paidDate && <span className="text-emerald-400"> • Réglée le {inst.paidDate}</span>}
-                                  </p>
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                  {inst.status === 'paye' ? (
-                                    <span className="text-[9px] font-bold text-brand-green bg-emerald-500/5 px-2 py-0.5 rounded border border-emerald-500/10 uppercase tracking-wider font-mono">
-                                      Payée
-                                    </span>
-                                  ) : (
-                                    <>
-                                      <span className="text-[9px] font-bold text-amber-500 bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/10 uppercase tracking-wider font-mono">
-                                        En attente
-                                      </span>
-                                      {loan.status === 'actif' && (
-                                        <button
-                                          onClick={() => handlePayInstallment(loan.id, inst)}
-                                          className="text-[10px] font-bold bg-emerald-500 hover:bg-emerald-600 text-white px-2 py-0.5 rounded transition"
-                                          title="Marquer comme payée et enregistrer le versement"
-                                        >
-                                          Régler
-                                        </button>
-                                      )}
-                                    </>
-                                  )}
-                                  <button
-                                    onClick={() => handleDeleteInstallment(loan.id, inst.id)}
-                                    className="p-1 text-gray-500 hover:text-red-400 rounded transition"
-                                    title="Supprimer cette échéance"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="py-6 text-center text-gray-500 text-xs italic">
-                            Aucune échéance planifiée pour ce prêt. Cliquez sur "Ajouter échéance" pour définir un échéancier.
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Right side: Récapitulatif des versements (Real Payments received) */}
-                      <div className="bg-gray-950/20 border border-gray-850 p-4 rounded-xl space-y-3">
-                        <div className="flex justify-between items-center pb-2 border-b border-gray-850">
-                          <div className="flex items-center gap-1.5">
-                            <CheckCircle className="w-4 h-4 text-emerald-400" />
-                            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-300">Versements Comptabilisés</h4>
-                          </div>
-                          {loan.status === 'actif' && (
-                            <button
-                              onClick={() => handleOpenRepayment(loan)}
-                              className="text-[10px] font-semibold bg-emerald-500/10 hover:bg-emerald-500 text-brand-green hover:text-white px-2.5 py-1 rounded transition flex items-center gap-1"
-                            >
-                              <Plus className="w-3 h-3" /> Versement libre
-                            </button>
-                          )}
-                        </div>
-
-                        {loan.repayments.length > 0 ? (
-                          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                            {loan.repayments.map(rep => (
-                              <div key={rep.id} className="p-2.5 bg-gray-900 border border-gray-800 rounded-xl text-xs flex justify-between items-center">
-                                <div>
-                                  <p className="font-semibold text-gray-200">Versement de {formattedCurrency(rep.amount)}</p>
-                                  <p className="text-[10px] text-gray-500 mt-0.5 font-mono">{rep.note} | Date : {rep.date}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[9px] font-bold text-brand-green bg-emerald-500/5 px-1.5 py-0.5 rounded border border-emerald-500/10 font-mono">Validé</span>
-                                  <button
-                                    onClick={() => handleDeleteRepayment(loan.id, rep.id)}
-                                    className="p-1 hover:bg-red-950 hover:text-red-400 rounded transition text-gray-500"
-                                    title="Annuler ce versement"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="py-6 text-center text-gray-500 text-xs italic">
-                            Aucun versement n'a été enregistré pour ce prêt.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {loan.description && (
-                      <div className="text-xs text-gray-400 bg-gray-950/30 p-3 rounded-xl border border-gray-850/50">
-                        <strong>Notes contractuelles :</strong> {loan.description}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="py-20 text-center bg-gray-900 border border-gray-800 rounded-2xl">
-              <Briefcase className="w-12 h-12 text-gray-700 mx-auto mb-3" />
-              <p className="text-sm font-semibold text-gray-400">Aucun prêt accordé (fonds sortants) enregistré</p>
-              <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-                Les dossiers d'emprunt ou de dette contractés (entrant) se gèrent dans l'onglet principal "Gestion des Prêts & Dettes". 
-                Pour suivre vos créances ou prêts accordés à des tiers (sortant), enregistrez d'abord un prêt.
-              </p>
-              <button
-                onClick={() => setIsLoanModalOpen(true)}
-                className="mt-4 bg-brand-blue hover:bg-blue-600 transition text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-lg shadow-blue-500/15 inline-flex items-center gap-1.5"
-              >
-                <Plus className="w-4 h-4" /> Enregistrer un Prêt Sortant
-              </button>
-            </div>
-          )}
-        </div>
+        <Repayments
+          loans={tenantLoans}
+          formattedCurrency={formattedCurrency}
+          onDeleteLoan={handleDeleteLoan}
+          onOpenRepayment={handleOpenRepayment}
+          onDeleteRepayment={handleDeleteRepayment}
+          onOpenInstallmentModal={handleOpenInstallmentModal}
+          onDeleteInstallment={handleDeleteInstallment}
+          onPayInstallment={handlePayInstallment}
+          onOpenNewLoanModal={() => setIsLoanModalOpen(true)}
+        />
       )}
 
       {/* CREATE INSTALLMENT (ÉCHÉANCE) MODAL */}
@@ -1030,7 +612,7 @@ export default function Expenses() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-sm w-full"
+              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-sm w-full modal-responsive"
             >
               <div className="flex justify-between items-center pb-3 border-b border-gray-800 mb-4">
                 <h3 className="text-base font-bold font-display text-white">Planifier une Échéance</h3>
@@ -1106,7 +688,7 @@ export default function Expenses() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-md w-full"
+              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-md w-full modal-responsive"
             >
               <div className="flex justify-between items-center pb-3 border-b border-gray-800 mb-4">
                 <h3 className="text-base font-bold font-display text-white">Saisir une Sortie d'Argent</h3>
@@ -1260,7 +842,7 @@ export default function Expenses() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-md w-full"
+              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-md w-full modal-responsive"
             >
               <div className="flex justify-between items-center pb-3 border-b border-gray-800 mb-4">
                 <h3 className="text-base font-bold font-display text-white">Créer un Dossier de Financement</h3>
@@ -1374,7 +956,7 @@ export default function Expenses() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-sm w-full"
+              className="bg-gray-900 border border-gray-800 p-6 rounded-2xl max-w-sm w-full modal-responsive"
             >
               <div className="flex justify-between items-center pb-3 border-b border-gray-800 mb-4">
                 <h3 className="text-base font-bold font-display text-white">Comptabiliser Versement</h3>

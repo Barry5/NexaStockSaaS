@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, ty
 import type { DBState, NotificationItem, NotificationType, Tenant, User, Sale, Product, Customer, Supplier, Expense, Loan } from '../types';
 import { fetchServerState, syncWithServer } from '../api/sync';
 import { LOCAL_CACHE_KEY } from '../constants';
+import { setItem as dexieSet, getItem as dexieGet, removeItem as dexieRemove } from '../lib/storage';
 
 interface DBContextValue {
   db: DBState;
@@ -46,9 +47,9 @@ export function DBProvider({ children }: { children: ReactNode }) {
 
   const persistCache = useCallback((data: DBState) => {
     try {
-      localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(data));
+      dexieSet(LOCAL_CACHE_KEY, JSON.stringify(data));
       setLastCacheTime(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    } catch { /* quota exceeded - ignore */ }
+    } catch { /* storage error - ignore */ }
   }, []);
 
   const loadStateFromServer = useCallback(async () => {
@@ -83,15 +84,17 @@ export function DBProvider({ children }: { children: ReactNode }) {
   }, [persistCache, addNotification]);
 
   useEffect(() => {
-    const cached = localStorage.getItem(LOCAL_CACHE_KEY);
-    if (cached) {
-      try {
-        const parsed: DBState = JSON.parse(cached);
-        if (parsed && Array.isArray(parsed.tenants) && parsed.tenants.length > 0) {
-          setDb(parsed);
-        }
-      } catch { /* invalid cache */ }
-    }
+    (async () => {
+      const cached = await dexieGet(LOCAL_CACHE_KEY);
+      if (cached) {
+        try {
+          const parsed: DBState = JSON.parse(cached);
+          if (parsed && Array.isArray(parsed.tenants) && parsed.tenants.length > 0) {
+            setDb(parsed);
+          }
+        } catch { /* invalid cache */ }
+      }
+    })();
     loadStateFromServer();
 
     const handleOnline = () => { setIsOnline(true); setSyncError(false); };

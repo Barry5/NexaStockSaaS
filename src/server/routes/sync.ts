@@ -176,6 +176,51 @@ export function compileCompleteState(): any {
   };
 }
 
+const SYNC_TABLES = [
+  'tenants', 'users', 'products', 'product_variants', 'customers', 'suppliers',
+  'sales', 'sale_items', 'expenses', 'loans', 'repayments', 'loan_installments',
+  'warehouses', 'stock_transfers', 'invoices', 'invoice_items',
+  'delivery_orders', 'delivery_order_items', 'payments', 'returns', 'return_items',
+  'affiliates', 'commission_rules', 'commission_ledger', 'commission_payments',
+  'commission_audit', 'sale_affiliates', 'sale_commission_items',
+  'subscription_invoices', 'subscription_payments', 'pricing_plans',
+  'global_saas_settings', 'audit_logs', 'invoice_audit_log',
+  'delivery_note_audit', 'gdrive_tokens', 'roles', 'permissions',
+  'role_permissions', 'user_roles', 'module_definitions', 'tenant_modules',
+];
+
+// GET /api/sync/changes?since=ISO_TIMESTAMP - Delta sync endpoint
+router.get('/changes', (req, res, next) => {
+  try {
+    const since = req.query.since as string;
+    if (!since) return res.status(400).json({ error: 'Paramètre since requis (ISO timestamp).' });
+
+    const changes: Record<string, any[]> = {};
+    for (const table of SYNC_TABLES) {
+      const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      const hasUpdatedAt = tableInfo.some(c => c.name === 'updated_at');
+      const hasCreatedAt = tableInfo.some(c => c.name === 'created_at');
+
+      if (hasUpdatedAt) {
+        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE updated_at >= ?`).all(since) as any[];
+      } else if (hasCreatedAt) {
+        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE created_at >= ?`).all(since) as any[];
+      } else {
+        changes[table] = [];
+      }
+    }
+
+    const deleted = db.prepare(`
+      SELECT table_name, record_id, created_at FROM sync_queue
+      WHERE operation = 'DELETE' AND created_at >= ? AND status = 'completed'
+    `).all(since) as any[];
+
+    res.json({ changes, deleted, since, timestamp: new Date().toISOString() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET: Compile and return full DB state
 router.get('/', (req, res, next) => {
   try {

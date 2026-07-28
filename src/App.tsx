@@ -347,7 +347,10 @@ function AppShell() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 flex flex-col min-w-0 relative lg:pt-0 pt-14">
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+      <main className="content-area flex flex-col relative lg:pt-0 pt-14">
 
         {/* TOP HEADER */}
         <header className="hidden lg:flex h-16 border-b border-gray-850 px-6 items-center justify-between bg-gray-900/40 backdrop-blur-md sticky top-0 z-35">
@@ -466,7 +469,7 @@ function AppShell() {
           </div>
         )}
 
-        <div className="flex-1 p-4 lg:p-6.5 pb-24 lg:pb-6.5 overflow-y-auto relative">
+        <div className="flex-1 p-3 sm:p-4 lg:p-6.5 pb-24 lg:pb-6.5 overflow-y-auto relative w-full max-w-full">
           <AnimatePresence mode="wait">
             {isSuspended ? (
               <motion.div key="suspended-shield"
