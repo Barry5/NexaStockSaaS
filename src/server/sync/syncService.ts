@@ -289,9 +289,12 @@ class SyncService {
 
   private upsertBatchToLocal(tableName: string, records: any[]) {
     if (records.length === 0) return;
-    const columns = Object.keys(records[0]).filter(c => c !== 'id');
+
+    // Convertir les enregistrements Supabase (snake_case) en format SQLite (camelCase)
+    const camelRecords = records.map(r => this.transformFromPostgres(r));
+
+    const columns = Object.keys(camelRecords[0]).filter(c => c !== 'id');
     const allColumns = ['id', ...columns];
-    const placeholders = allColumns.map(() => '?').join(', ');
 
     // Récupérer les colonnes réelles de la table SQLite
     const tableInfo = db.prepare(`PRAGMA table_info(${tableName})`).all() as { name: string }[];
@@ -306,11 +309,8 @@ class SyncService {
     `);
 
     const transaction = db.transaction(() => {
-      for (const record of records) {
-        const values = insertCols.map(c => {
-          const val = this.transformFromPostgres(record[c]);
-          return val !== undefined ? val : null;
-        });
+      for (const record of camelRecords) {
+        const values = insertCols.map(c => record[c] !== undefined ? record[c] : null);
         stmt.run(...values);
       }
     });
@@ -335,8 +335,16 @@ class SyncService {
     return pg;
   }
 
-  private transformFromPostgres(value: unknown): unknown {
-    return value;
+  private snakeToCamel(key: string): string {
+    return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  }
+
+  private transformFromPostgres(record: Record<string, unknown>): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(record)) {
+      result[this.snakeToCamel(key)] = value;
+    }
+    return result;
   }
 
   private camelToSnake(key: string): string {
