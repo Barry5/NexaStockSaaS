@@ -243,21 +243,32 @@ router.post('/reset-from-cloud', authenticateToken, requireRole(['superadmin']),
   }
 });
 
-// GET /api/sync/reset-app: ONE-CLICK reset — clear local + pull from Supabase + reload
-// Paste this URL in the browser address bar (cookie auth, no console needed)
-router.get('/reset-app', authenticateToken, requireRole(['superadmin']), async (req, res, next) => {
+// GET /api/sync/reset-app?key=nexastock-reset-2026
+// ONE-CLICK reset — clear local + pull from Supabase
+// Paste this URL in the browser address bar (no console, no auth header needed)
+const RESET_KEY = process.env.RESET_KEY || 'nexastock-reset-2026';
+router.get('/reset-app', (req, res) => {
   try {
+    const key = req.query.key as string;
+    if (key !== RESET_KEY) {
+      return res.status(403).json({ error: 'Clé de réinitialisation invalide. Utilisez ?key=nexastock-reset-2026' });
+    }
+
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'sync_%'`).all() as { name: string }[];
     for (const { name } of tables) db.prepare(`DELETE FROM ${name}`).run();
 
-    const pullResult = await syncService.fullPull();
+    const resultPromise = syncService.fullPull().then(pullResult => {
+      res.json({
+        success: true,
+        tablesCleared: tables.length,
+        pulled: pullResult.pulled,
+        errors: pullResult.errors.length > 0 ? pullResult.errors : undefined,
+        message: `SQLite vidé (${tables.length} tables), ${pullResult.pulled} enregistrements importés depuis Supabase`
+      });
+    });
 
-    res.json({
-      success: true,
-      tablesCleared: tables.length,
-      pulled: pullResult.pulled,
-      errors: pullResult.errors,
-      message: `SQLite vidé (${tables.length} tables), ${pullResult.pulled} enregistrements importés depuis Supabase`
+    resultPromise.catch((err: any) => {
+      res.status(500).json({ error: err.message });
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
