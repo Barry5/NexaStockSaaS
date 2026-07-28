@@ -19,6 +19,8 @@ initializeDatabase();
 import { syncService } from './src/server/sync/syncService.js';
 syncService.initialize().then(async () => {
   if (syncService.isOnline()) {
+    const pullResult = await syncService.fullPull();
+    console.log(`[SERVER] Sync fullPull: ${pullResult.pulled} pulled, ${pullResult.tables} tables`);
     const pushResult = await syncService.fullPush();
     console.log(`[SERVER] Sync fullPush: ${pushResult.pushed} pushed, ${pushResult.failed} failed, ${pushResult.tables} tables`);
   }
