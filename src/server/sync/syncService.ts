@@ -198,10 +198,6 @@ class SyncService {
   }
 
   async fullPull(): Promise<{ pulled: number; errors: string[]; tables: number }> {
-    if (!await this.checkConnectivity()) {
-      return { pulled: 0, errors: ['Supabase non disponible'], tables: 0 };
-    }
-
     let totalPulled = 0;
     const errors: string[] = [];
     let tablesProcessed = 0;

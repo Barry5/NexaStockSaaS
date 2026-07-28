@@ -243,6 +243,21 @@ router.post('/reset-from-cloud', authenticateToken, requireRole(['superadmin']),
   }
 });
 
+// POST /api/sync/clear-local: Clear all local SQLite data (no Supabase dependency)
+router.post('/clear-local', authenticateToken, requireRole(['superadmin']), (req, res) => {
+  try {
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'sync_%'`).all() as { name: string }[];
+    let cleared = 0;
+    for (const { name } of tables) {
+      db.prepare(`DELETE FROM ${name}`).run();
+      cleared++;
+    }
+    res.json({ success: true, tablesCleared: cleared });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET /api/sync/status: Get sync service status
 router.get('/status', authenticateToken, requireRole(['superadmin']), (req, res) => {
   res.json(syncService.getStatus());
