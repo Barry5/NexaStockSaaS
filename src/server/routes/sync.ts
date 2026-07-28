@@ -1,7 +1,9 @@
 import { Router, Response } from 'express';
 import db from '../database/db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth.js';
+import { requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../services/auth.js';
+import { syncService } from '../sync/syncService.js';
 
 const router = Router();
 
@@ -219,6 +221,21 @@ router.get('/changes', (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// POST /api/sync/full-push: Push all local data to Supabase
+router.post('/full-push', authenticateToken, requireRole(['superadmin']), async (req, res, next) => {
+  try {
+    const result = await syncService.fullPush();
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/sync/status: Get sync service status
+router.get('/status', authenticateToken, requireRole(['superadmin']), (req, res) => {
+  res.json(syncService.getStatus());
 });
 
 // GET: Compile and return full DB state

@@ -17,7 +17,11 @@ initializeDatabase();
 
 // Initialize Sync Service (background sync to Supabase)
 import { syncService } from './src/server/sync/syncService.js';
-syncService.initialize().then(() => {
+syncService.initialize().then(async () => {
+  if (syncService.isOnline()) {
+    const pushResult = await syncService.fullPush();
+    console.log(`[SERVER] Sync fullPush: ${pushResult.pushed} pushed, ${pushResult.failed} failed, ${pushResult.tables} tables`);
+  }
   syncService.startBackgroundSync(300000);
   console.log('[SERVER] Sync service initialized and background sync started');
 });

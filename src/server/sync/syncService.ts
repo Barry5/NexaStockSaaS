@@ -197,6 +197,41 @@ class SyncService {
     return result;
   }
 
+  async fullPush(): Promise<{ pushed: number; failed: number; errors: string[]; tables: number }> {
+    if (!await this.checkConnectivity()) {
+      return { pushed: 0, failed: 0, errors: ['Supabase non disponible'], tables: 0 };
+    }
+
+    let totalPushed = 0;
+    let totalFailed = 0;
+    const errors: string[] = [];
+    let tablesProcessed = 0;
+
+    for (const mapping of TABLE_MAPPINGS) {
+      try {
+        const tableInfo = db.prepare(`PRAGMA table_info(${mapping.sqliteName})`).all() as { name: string }[];
+        const cols = tableInfo.map(c => c.name).join(', ');
+        const records = db.prepare(`SELECT ${cols} FROM ${mapping.sqliteName}`).all() as Record<string, unknown>[];
+
+        if (records.length === 0) continue;
+
+        const pgRecords = records.map(r => this.transformToPostgres(r));
+        const result = await batchUpsert(mapping.pgName, pgRecords);
+        totalPushed += result.success;
+        if (result.errors.length > 0) {
+          errors.push(...result.errors.map(e => `${mapping.sqliteName}: ${e}`));
+          totalFailed += records.length - result.success;
+        }
+        tablesProcessed++;
+      } catch (err: any) {
+        errors.push(`${mapping.sqliteName}: ${err.message}`);
+        totalFailed++;
+      }
+    }
+
+    return { pushed: totalPushed, failed: totalFailed, errors, tables: tablesProcessed };
+  }
+
   private async upsertToRemote(tableName: string, record: Record<string, unknown>): Promise<void> {
     const mapping = TABLE_MAPPINGS.find(t => t.sqliteName === tableName);
     if (!mapping) throw new Error(`Table ${tableName} non configurée pour la synchro`);
