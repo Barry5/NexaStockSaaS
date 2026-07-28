@@ -197,6 +197,41 @@ class SyncService {
     return result;
   }
 
+  async fullPull(): Promise<{ pulled: number; errors: string[]; tables: number }> {
+    if (!await this.checkConnectivity()) {
+      return { pulled: 0, errors: ['Supabase non disponible'], tables: 0 };
+    }
+
+    let totalPulled = 0;
+    const errors: string[] = [];
+    let tablesProcessed = 0;
+
+    for (const mapping of TABLE_MAPPINGS) {
+      try {
+        const client = (await import('../services/supabase/supabaseService.js')).getAdminClient();
+        const { data, error } = await client
+          .from(mapping.pgName)
+          .select('*')
+          .order('id', { ascending: true });
+
+        if (error) {
+          errors.push(`${mapping.sqliteName}: ${error.message}`);
+          continue;
+        }
+        if (!data || data.length === 0) continue;
+
+        db.prepare(`DELETE FROM ${mapping.sqliteName}`).run();
+        this.upsertBatchToLocal(mapping.sqliteName, data);
+        totalPulled += data.length;
+        tablesProcessed++;
+      } catch (err: any) {
+        errors.push(`${mapping.sqliteName}: ${err.message}`);
+      }
+    }
+
+    return { pulled: totalPulled, errors, tables: tablesProcessed };
+  }
+
   async fullPush(): Promise<{ pushed: number; failed: number; errors: string[]; tables: number }> {
     if (!await this.checkConnectivity()) {
       return { pushed: 0, failed: 0, errors: ['Supabase non disponible'], tables: 0 };

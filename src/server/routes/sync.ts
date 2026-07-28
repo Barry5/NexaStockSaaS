@@ -233,6 +233,16 @@ router.post('/full-push', authenticateToken, requireRole(['superadmin']), async 
   }
 });
 
+// POST /api/sync/reset-from-cloud: Clear local SQLite and pull all from Supabase
+router.post('/reset-from-cloud', authenticateToken, requireRole(['superadmin']), async (req, res, next) => {
+  try {
+    const result = await syncService.fullPull();
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET /api/sync/status: Get sync service status
 router.get('/status', authenticateToken, requireRole(['superadmin']), (req, res) => {
   res.json(syncService.getStatus());
