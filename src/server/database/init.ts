@@ -8,6 +8,7 @@ import { up as up006 } from './migrations/006_commissions_v2.js';
 import { up as up007 } from './migrations/007_delivery_notes.js';
 import { up as up008 } from './migrations/008_fix_sales_fk.js';
 import { up as up009 } from './migrations/009_gdrive_tokens.js';
+import { up as up010 } from './migrations/010_sync_upgrade.js';
 import { seed } from './seeds.js';
 import { importSnapshot } from './snapshot.js';
 
@@ -23,6 +24,7 @@ export function initializeDatabase() {
     up007(db);
     up008(db);
     up009(db);
+    up010(db);
     console.log('Tables created or already present.');
 
     seed(db);

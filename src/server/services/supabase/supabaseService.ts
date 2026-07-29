@@ -51,14 +51,22 @@ export function isSupabaseConfigured(): boolean {
 
 export async function checkConnection(): Promise<boolean> {
   try {
-    if (!isSupabaseConfigured()) return false;
+    if (!isSupabaseConfigured()) {
+      console.log('[SUPABASE] Configuration manquante (SUPABASE_URL ou clés absent(e)s).');
+      return false;
+    }
     const { data, error } = await getAdminClient()
-      .from('global_saas_settings')
+      .from('tenants')
       .select('id')
-      .limit(1)
-      .maybeSingle();
-    return !error;
-  } catch {
+      .limit(1);
+
+    if (error) {
+      console.error('[SUPABASE] Erreur de test de connexion (tenants):', error.message);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.error('[SUPABASE] Exception lors du test de connexion:', err?.message || err);
     return false;
   }
 }

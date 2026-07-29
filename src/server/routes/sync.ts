@@ -4,6 +4,7 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/auth.js';
 import { requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../services/auth.js';
 import { syncService } from '../sync/syncService.js';
+import { syncEngine } from '../sync/syncEngine.js';
 
 const router = Router();
 
@@ -300,6 +301,46 @@ router.get('/', (req, res, next) => {
   try {
     const state = compileCompleteState();
     res.json(state);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/sync/pull?since=ISO_TIMESTAMP - Incremental pull (changes + deletions)
+router.get('/pull', (req, res, next) => {
+  try {
+    const since = req.query.since as string;
+    if (!since) return res.status(400).json({ error: 'Paramètre since requis (ISO timestamp).' });
+    const tableName = req.query.table as string | undefined;
+    const result = syncEngine.pullChanges(since, tableName);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/sync/push - Incremental push with conflict resolution
+router.post('/push', authenticateToken, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const { changes } = req.body;
+    if (!changes || !Array.isArray(changes)) {
+      return res.status(400).json({ error: 'Format invalide. Attendu: { changes: [...] }' });
+    }
+
+    const tenantId = req.user?.tenantId;
+    const deviceId = req.headers['x-device-id'] as string || 'server';
+
+    const result = syncEngine.pushChanges(changes.map((c: any) => ({
+      table: c.table,
+      recordId: c.recordId,
+      operation: c.operation,
+      data: c.data || {},
+      version: c.version,
+      deviceId,
+      companyId: tenantId,
+    })));
+
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -742,6 +783,21 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res, next)
     // Compile and return the merged consolidated state back to the client
     const consolidatedState = compileCompleteState();
     res.json(consolidatedState);
+
+    // For backward-compat full-state sync: push to Supabase via both queue and changelog
+    syncService.syncUp()
+      .then(r1 => {
+        if (r1.pushed > 0 || r1.failed > 0) {
+          console.log(`[SYNC POST] syncUp: ${r1.pushed} pushed, ${r1.failed} failed`);
+        }
+        return syncService.syncUpFromChangelog();
+      })
+      .then(r2 => {
+        if (r2.pushed > 0 || r2.failed > 0) {
+          console.log(`[SYNC POST] changelog: ${r2.pushed} pushed, ${r2.failed} failed`);
+        }
+      })
+      .catch(err => console.error('[SYNC POST] sync error:', err));
   } catch (error) {
     next(error);
   }

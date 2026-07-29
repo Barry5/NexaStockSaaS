@@ -159,3 +159,7 @@ export function cleanOldSyncRecords(daysOld: number = 30) {
   const cutoff = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000).toISOString();
   db.prepare(`DELETE FROM sync_queue WHERE created_at < ? AND status = 'completed'`).run(cutoff);
 }
+
+export function loadLastSyncTimestamps(): { table_name: string; last_sync_at: string | null }[] {
+  return db.prepare(`SELECT table_name, last_sync_at FROM sync_tracking`).all() as { table_name: string; last_sync_at: string | null }[];
+}

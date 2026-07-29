@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { DBState, NotificationItem, NotificationType, Tenant, User, Sale, Product, Customer, Supplier, Expense, Loan } from '../types';
-import { fetchServerState, syncWithServer } from '../api/sync';
+import { fetchServerState, syncWithServer, pullRemoteChanges, flushPendingChanges, enqueueChange, extractChanges, loadPendingChanges, type SyncChange } from '../api/sync';
 import { LOCAL_CACHE_KEY } from '../constants';
 import { setItem as dexieSet, getItem as dexieGet, removeItem as dexieRemove } from '../lib/storage';
 
@@ -24,12 +24,48 @@ interface DBContextValue {
 
 const DBContext = createContext<DBContextValue | null>(null);
 
+function deepMergeDbState(local: DBState, remoteChanges: Record<string, unknown[]>, deletions: Record<string, string[]>): DBState {
+  const merged = { ...local };
+
+  for (const [table, records] of Object.entries(remoteChanges)) {
+    if (!records.length) continue;
+    const key = table as keyof DBState;
+    const existing = (Array.isArray(merged[key]) ? merged[key] : []) as any[];
+    const existingMap = new Map(existing.map(r => [r.id, r]));
+
+    for (const record of records) {
+      const rec = record as any;
+      const existingRecord = existingMap.get(rec.id);
+      if (!existingRecord) {
+        existing.push(record);
+      } else {
+        const localVersion = existingRecord.version || 0;
+        const remoteVersion = rec.version || 0;
+        if (remoteVersion >= localVersion) {
+          const idx = existing.findIndex(r => r.id === rec.id);
+          if (idx >= 0) existing[idx] = record;
+        }
+      }
+    }
+    (merged as any)[key] = existing;
+  }
+
+  for (const [table, ids] of Object.entries(deletions)) {
+    if (!ids.length) continue;
+    const key = table as keyof DBState;
+    const existing = (Array.isArray(merged[key]) ? merged[key] : []) as any[];
+    (merged as any)[key] = existing.filter(r => !ids.includes(r.id));
+  }
+
+  return merged;
+}
+
 export function DBProvider({ children }: { children: ReactNode }) {
   const [db, setDb] = useState<DBState>({
     tenants: [], users: [], products: [], sales: [],
     customers: [], suppliers: [], expenses: [], loans: [],
     warehouses: [], transfers: [], auditLogs: [],
-    subscriptionInvoices: [], variants: []
+    subscriptionInvoices: [], variants: [],
   });
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -38,6 +74,8 @@ export function DBProvider({ children }: { children: ReactNode }) {
   const [lastCacheTime, setLastCacheTime] = useState('');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifCounterRef = useRef(0);
+  const dbRef = useRef(db);
+  dbRef.current = db;
 
   const addNotification = useCallback((text: string, type?: NotificationType) => {
     const id = `notif-${Date.now()}-${++notifCounterRef.current}`;
@@ -63,7 +101,32 @@ export function DBProvider({ children }: { children: ReactNode }) {
     }
   }, [persistCache]);
 
-  const sync = useCallback(async (updatedDb: DBState) => {
+  const incrementalSync = useCallback(async (nextDb: DBState) => {
+    setIsSyncing(true);
+    try {
+      const prevDb = dbRef.current;
+      const changes = extractChanges(prevDb, nextDb);
+
+      for (const change of changes) {
+        enqueueChange(change);
+      }
+
+      if (isOnline) {
+        await flushPendingChanges();
+      }
+
+      setDb(nextDb);
+      persistCache(nextDb);
+      setSyncError(false);
+    } catch (error: any) {
+      console.error('Sync error:', error?.message || error);
+      setSyncError(true);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [persistCache, isOnline]);
+
+  const fullSync = useCallback(async (updatedDb: DBState) => {
     setIsSyncing(true);
     try {
       const savedData = await syncWithServer(updatedDb);
@@ -73,7 +136,7 @@ export function DBProvider({ children }: { children: ReactNode }) {
         setSyncError(false);
       }
     } catch (error: any) {
-      console.error('Sync failed:', error?.message || error);
+      console.error('Full sync failed:', error?.message || error);
       setSyncError(true);
       if (error?.message?.includes('401') || error?.message?.includes('Token')) {
         addNotification('Session expirée. Veuillez vous reconnecter.', 'error');
@@ -113,66 +176,80 @@ export function DBProvider({ children }: { children: ReactNode }) {
     }
   }, [db, persistCache]);
 
+  // Background sync cycle: push pending then pull remote
+  useEffect(() => {
+    if (!isOnline) return;
+    const interval = setInterval(async () => {
+      try {
+        await flushPendingChanges();
+        const pullResult = await pullRemoteChanges();
+        if (pullResult && (Object.keys(pullResult.changes).length > 0 || Object.keys(pullResult.deletions).length > 0)) {
+          setDb(prev => {
+            const merged = deepMergeDbState(prev, pullResult.changes, pullResult.deletions);
+            persistCache(merged);
+            return merged;
+          });
+        }
+      } catch {
+        // silent
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [isOnline, persistCache]);
+
   const handleUpdateDb = useCallback((nextDb: DBState) => {
-    setDb(nextDb);
-    return sync(nextDb);
-  }, [sync]);
+    incrementalSync(nextDb);
+  }, [incrementalSync]);
 
   const handleProductsUpdate = useCallback((nextProducts: Product[]) => {
     const nextDb = { ...db, products: nextProducts };
-    setDb(nextDb);
-    sync(nextDb);
-  }, [db, sync]);
+    incrementalSync(nextDb);
+  }, [db, isOnline]);
 
   const handleAddSale = useCallback((newSale: Sale, nextProducts: Product[], nextCustomers: Customer[]) => {
     const nextDb = { ...db, sales: [...db.sales, newSale], products: nextProducts, customers: nextCustomers };
-    setDb(nextDb);
-    sync(nextDb);
+    incrementalSync(nextDb);
     addNotification(`Nouvelle vente enregistrée : ${newSale.invoiceNumber} (${newSale.customerName})`);
-  }, [db, sync, addNotification]);
+  }, [db, isOnline, addNotification]);
 
   const handleUpdateExpenses = useCallback((nextExpenses: Expense[]) => {
     try {
       const nextDb = { ...db, expenses: nextExpenses };
-      setDb(nextDb);
-      sync(nextDb);
+      incrementalSync(nextDb);
       addNotification('Registre des dépenses mis à jour.');
     } catch (error) {
       console.error('Erreur lors de la mise à jour des dépenses:', error);
       addNotification('Erreur lors de la mise à jour des dépenses.', 'error');
     }
-  }, [db, sync, addNotification]);
+  }, [db, isOnline, addNotification]);
 
   const handleUpdateLoans = useCallback((nextLoans: Loan[]) => {
     try {
       const nextDb = { ...db, loans: nextLoans };
-      setDb(nextDb);
-      sync(nextDb);
+      incrementalSync(nextDb);
       addNotification('Tableau des financements mis à jour.');
     } catch (error) {
       console.error('Erreur lors de la mise à jour des financements:', error);
       addNotification('Erreur lors de la mise à jour des financements.', 'error');
     }
-  }, [db, sync, addNotification]);
+  }, [db, isOnline, addNotification]);
 
   const handleUpdateCustomers = useCallback((nextCustomers: Customer[]) => {
     const nextDb = { ...db, customers: nextCustomers };
-    setDb(nextDb);
-    sync(nextDb);
-  }, [db, sync]);
+    incrementalSync(nextDb);
+  }, [db, isOnline]);
 
   const handleUpdateSuppliers = useCallback((nextSuppliers: Supplier[]) => {
     const nextDb = { ...db, suppliers: nextSuppliers };
-    setDb(nextDb);
-    sync(nextDb);
-  }, [db, sync]);
+    incrementalSync(nextDb);
+  }, [db, isOnline]);
 
   return (
     <DBContext.Provider value={{
       db, isSyncing, syncError, isOnline, lastCacheTime, notifications,
       addNotification, handleUpdateDb, handleProductsUpdate, handleAddSale,
       handleUpdateExpenses, handleUpdateLoans, handleUpdateCustomers, handleUpdateSuppliers,
-      handleSyncFromServer: loadStateFromServer
+      handleSyncFromServer: loadStateFromServer,
     }}>
       {children}
     </DBContext.Provider>
