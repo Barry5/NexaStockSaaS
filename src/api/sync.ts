@@ -89,35 +89,56 @@ export async function pullChanges(since: string): Promise<PullResult> {
   return res.json() as Promise<PullResult>;
 }
 
+const FIELD_TO_TABLE: Record<string, string> = {
+  tenants: 'tenants', users: 'users', products: 'products', customers: 'customers',
+  suppliers: 'suppliers', expenses: 'expenses', loans: 'loans',
+  warehouses: 'warehouses', transfers: 'stock_transfers',
+  auditLogs: 'audit_logs', subscriptionInvoices: 'subscription_invoices',
+  variants: 'product_variants', subscriptionPayments: 'subscription_payments',
+  pricingPlans: 'pricing_plans',
+  invoices: 'invoices', deliveryOrders: 'delivery_orders',
+  payments: 'payments', returns: 'returns',
+  affiliates: 'affiliates', commissionRules: 'commission_rules',
+  commissionLedger: 'commission_ledger', commissionPayments: 'commission_payments',
+  commissionAudit: 'commission_audit', invoiceAuditLogs: 'invoice_audit_log',
+  deliveryNoteAudit: 'delivery_note_audit',
+};
+
+const ARRAY_FIELDS = Object.keys(FIELD_TO_TABLE);
+
 export function extractChanges(prevDb: DBState, nextDb: DBState): SyncChange[] {
   const changes: SyncChange[] = [];
-  const tables: (keyof DBState)[] = [
-    'tenants', 'users', 'products', 'customers', 'suppliers', 'expenses', 'loans',
-    'warehouses', 'transfers', 'auditLogs', 'subscriptionInvoices', 'variants',
-    'invoices', 'deliveryOrders', 'payments', 'returns', 'affiliates',
-    'commissionRules', 'commissionLedger', 'commissionPayments', 'commissionAudit',
-  ];
 
-  for (const table of tables) {
-    const prev = (prevDb[table] || []) as any[];
-    const next = (nextDb[table] || []) as any[];
+  for (const field of ARRAY_FIELDS) {
+    const table = FIELD_TO_TABLE[field];
+    const prev = ((prevDb as any)[field] || []) as any[];
+    const next = ((nextDb as any)[field] || []) as any[];
     const prevMap = new Map(prev.map(r => [r.id, r]));
     const nextMap = new Map(next.map(r => [r.id, r]));
 
     for (const record of next) {
       const prevRecord = prevMap.get(record.id);
       if (!prevRecord) {
-        changes.push({ table: table as string, recordId: record.id, operation: 'CREATE', data: record, version: record.version || 1 });
+        changes.push({ table, recordId: record.id, operation: 'CREATE', data: record, version: record.version || 1 });
       } else if (JSON.stringify(prevRecord) !== JSON.stringify(record)) {
-        changes.push({ table: table as string, recordId: record.id, operation: 'UPDATE', data: record, version: record.version || (prevRecord.version || 0) + 1 });
+        changes.push({ table, recordId: record.id, operation: 'UPDATE', data: record, version: record.version || (prevRecord.version || 0) + 1 });
       }
     }
 
     for (const record of prev) {
       if (!nextMap.has(record.id)) {
-        changes.push({ table: table as string, recordId: record.id, operation: 'DELETE', data: record, version: record.version });
+        changes.push({ table, recordId: record.id, operation: 'DELETE', data: record, version: record.version });
       }
     }
+  }
+
+  const prevSettings = prevDb.globalSaaSSettings;
+  const nextSettings = nextDb.globalSaaSSettings;
+  if (JSON.stringify(prevSettings) !== JSON.stringify(nextSettings) && nextSettings) {
+    changes.push({
+      table: 'global_saas_settings', recordId: '1', operation: 'UPDATE',
+      data: nextSettings as any, version: 1,
+    });
   }
 
   return changes;

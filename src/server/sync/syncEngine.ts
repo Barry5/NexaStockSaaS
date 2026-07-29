@@ -270,6 +270,7 @@ export class SyncEngine {
     const values = insertCols.map(c => {
       const v = data[c];
       if (v === undefined) return null;
+      if (typeof v === 'boolean') return v ? 1 : 0;
       if (v !== null && typeof v === 'object' && !(v instanceof Date)) {
         return JSON.stringify(v);
       }

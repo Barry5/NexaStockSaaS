@@ -296,6 +296,23 @@ router.get('/status', authenticateToken, requireRole(['superadmin']), (req, res)
   res.json(syncService.getStatus());
 });
 
+// POST /api/sync/trigger: Manually trigger a sync cycle (push + pull)
+router.post('/trigger', authenticateToken, requireRole(['superadmin']), async (req, res, next) => {
+  try {
+    const upResult = await syncService.syncUp();
+    const changelogResult = await syncService.syncUpFromChangelog();
+    const downResult = await syncService.syncDown();
+    res.json({
+      syncQueue: upResult,
+      changelog: changelogResult,
+      pull: downResult,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET: Compile and return full DB state
 router.get('/', (req, res, next) => {
   try {
