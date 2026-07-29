@@ -43,7 +43,7 @@ export interface SyncResult {
   duration: number;
 }
 
-export interface SyncStatus {
+export interface SyncStatusInfo {
   online: boolean;
   pendingCount: number;
   failedCount: number;

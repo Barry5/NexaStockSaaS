@@ -18,44 +18,8 @@ export interface SyncQueueItem {
   last_error: string | null;
 }
 
-const INIT_SYNC_QUEUE = `
-  CREATE TABLE IF NOT EXISTS sync_queue (
-    id TEXT PRIMARY KEY,
-    table_name TEXT NOT NULL,
-    record_id TEXT NOT NULL,
-    operation TEXT NOT NULL CHECK(operation IN ('CREATE','UPDATE','DELETE')),
-    payload TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    retry_count INTEGER DEFAULT 0,
-    max_retries INTEGER DEFAULT 5,
-    status TEXT DEFAULT 'pending' CHECK(status IN ('pending','processing','completed','failed')),
-    device_id TEXT,
-    company_id TEXT,
-    last_error TEXT
-  )
-`;
-
-const INIT_SYNC_TRACKING = `
-  CREATE TABLE IF NOT EXISTS sync_tracking (
-    id TEXT PRIMARY KEY,
-    table_name TEXT NOT NULL UNIQUE,
-    last_sync_at TEXT,
-    last_sync_version INTEGER DEFAULT 0,
-    device_id TEXT,
-    company_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )
-`;
-
 export function initializeSyncTables() {
-  db.exec(INIT_SYNC_QUEUE);
-  db.exec(INIT_SYNC_TRACKING);
-
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_queue_table ON sync_queue(table_name)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_queue_created ON sync_queue(created_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_tracking_table ON sync_tracking(table_name)`);
+  // Tables créées par migration 011_sync_tables — plus rien à faire ici
 }
 
 export function enqueue(

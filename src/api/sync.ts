@@ -1,16 +1,9 @@
 import type { DBState } from '../types';
-
-const SYNC_TABLES = [
-  'tenants', 'users', 'products', 'product_variants', 'customers', 'suppliers',
-  'sales', 'sale_items', 'expenses', 'loans', 'repayments', 'loan_installments',
-  'warehouses', 'stock_transfers', 'invoices', 'invoice_items',
-  'delivery_orders', 'delivery_order_items', 'payments', 'returns', 'return_items',
-  'affiliates', 'commission_rules', 'commission_ledger', 'commission_payments',
-  'commission_audit', 'sale_affiliates', 'sale_commission_items',
-  'subscription_invoices', 'subscription_payments', 'pricing_plans',
-  'global_saas_settings', 'audit_logs', 'invoice_audit_log',
-  'delivery_note_audit', 'gdrive_tokens',
-];
+import {
+  enqueueBatch as dexieEnqueueBatch, dequeuePendingChanges, markProcessing, markCompleted,
+  markFailed, setMeta, getMeta, removeMeta,
+  getAllPending, getPendingCount as dexiePendingCount, clearCompleted, retryFailed,
+} from '../lib/syncQueue';
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem('nexastock_token');
@@ -145,42 +138,61 @@ export function extractChanges(prevDb: DBState, nextDb: DBState): SyncChange[] {
 }
 
 let syncInProgress = false;
-let pendingChanges: SyncChange[] = [];
-let lastPullTimestamp = localStorage.getItem('sync_last_pull') || new Date(0).toISOString();
+let lastPullTimestamp = new Date(0).toISOString();
 
 export function enqueueChange(change: SyncChange) {
-  pendingChanges.push(change);
-  localStorage.setItem('sync_pending', JSON.stringify(pendingChanges));
+  dexieEnqueueBatch([change]).catch(() => {});
 }
 
-export function getPendingChanges(): SyncChange[] {
-  return pendingChanges;
+export async function getPendingChanges(): Promise<SyncChange[]> {
+  return getAllPending();
 }
 
-export function clearPendingChanges() {
-  pendingChanges = [];
-  localStorage.removeItem('sync_pending');
+export async function clearPendingChanges() {
+  await clearCompleted();
 }
 
-export function loadPendingChanges() {
-  try {
-    const stored = localStorage.getItem('sync_pending');
-    if (stored) pendingChanges = JSON.parse(stored);
-  } catch { pendingChanges = []; }
+export async function getPendingCount(): Promise<number> {
+  return dexiePendingCount();
 }
 
-export async function flushPendingChanges(): Promise<PushResult | null> {
-  if (pendingChanges.length === 0) return null;
+export async function flushPendingChanges(flushBatchSize: number = 50): Promise<PushResult | null> {
+  const changes = await dequeuePendingChanges(flushBatchSize);
+  if (changes.length === 0) return null;
   if (syncInProgress) return null;
   syncInProgress = true;
 
   try {
-    const result = await pushChanges(pendingChanges);
-    if (result.applied > 0) {
-      const remaining = pendingChanges.slice(result.applied);
-      pendingChanges = remaining;
-      localStorage.setItem('sync_pending', JSON.stringify(remaining));
+    const batch = changes.map(c => ({
+      table: c.table,
+      recordId: c.recordId,
+      operation: c.operation,
+      data: c.data,
+      version: c.version,
+    }));
+
+    for (const change of changes) {
+      await markProcessing(change.id!);
     }
+
+    const result = await pushChanges(batch);
+    const appliedIds = changes.slice(0, result.applied).map(c => c.id!);
+    const conflictIds = result.conflicts.map(c => c.recordId);
+    const errorIds = result.errors.map(e => e.recordId);
+
+    for (const id of appliedIds) {
+      await markCompleted(id);
+    }
+
+    for (const change of changes) {
+      if (conflictIds.includes(change.recordId)) {
+        await markCompleted(change.id!);
+      } else if (errorIds.includes(change.recordId)) {
+        const err = result.errors.find(e => e.recordId === change.recordId);
+        await markFailed(change.id!, err?.error || 'Unknown error');
+      }
+    }
+
     return result;
   } finally {
     syncInProgress = false;
@@ -195,7 +207,7 @@ export async function pullRemoteChanges(): Promise<PullResult | null> {
     const result = await pullChanges(lastPullTimestamp);
     if (result.timestamp) {
       lastPullTimestamp = result.timestamp;
-      localStorage.setItem('sync_last_pull', lastPullTimestamp);
+      await setMeta('sync_last_pull', lastPullTimestamp);
     }
     return result;
   } finally {
@@ -207,4 +219,7 @@ export function getLastPullTimestamp(): string {
   return lastPullTimestamp;
 }
 
-loadPendingChanges();
+(async () => {
+  const stored = await getMeta('sync_last_pull');
+  if (stored) lastPullTimestamp = stored;
+})();

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { DBState, NotificationItem, NotificationType, Tenant, User, Sale, Product, Customer, Supplier, Expense, Loan } from '../types';
-import { fetchServerState, syncWithServer, pullRemoteChanges, flushPendingChanges, enqueueChange, extractChanges, loadPendingChanges, type SyncChange } from '../api/sync';
+import { fetchServerState, syncWithServer, pullRemoteChanges, flushPendingChanges, enqueueChange, extractChanges, getPendingCount, type SyncChange } from '../api/sync';
 import { LOCAL_CACHE_KEY } from '../constants';
 import { setItem as dexieSet, getItem as dexieGet, removeItem as dexieRemove } from '../lib/storage';
 
@@ -76,6 +76,7 @@ export function DBProvider({ children }: { children: ReactNode }) {
   const notifCounterRef = useRef(0);
   const dbRef = useRef(db);
   dbRef.current = db;
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const addNotification = useCallback((text: string, type?: NotificationType) => {
     const id = `notif-${Date.now()}-${++notifCounterRef.current}`;
@@ -101,6 +102,22 @@ export function DBProvider({ children }: { children: ReactNode }) {
     }
   }, [persistCache]);
 
+  const flushNow = useCallback(async () => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    await flushPendingChanges();
+    const pullResult = await pullRemoteChanges();
+    if (pullResult && (Object.keys(pullResult.changes).length > 0 || Object.keys(pullResult.deletions).length > 0)) {
+      setDb(prev => {
+        const merged = deepMergeDbState(prev, pullResult.changes, pullResult.deletions);
+        persistCache(merged);
+        return merged;
+      });
+    }
+  }, [persistCache]);
+
   const incrementalSync = useCallback(async (nextDb: DBState) => {
     setIsSyncing(true);
     try {
@@ -112,7 +129,10 @@ export function DBProvider({ children }: { children: ReactNode }) {
       }
 
       if (isOnline) {
-        await flushPendingChanges();
+        if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = setTimeout(() => {
+          flushNow();
+        }, 2000);
       }
 
       setDb(nextDb);
@@ -124,7 +144,7 @@ export function DBProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsSyncing(false);
     }
-  }, [persistCache, isOnline]);
+  }, [persistCache, isOnline, flushNow]);
 
   const fullSync = useCallback(async (updatedDb: DBState) => {
     setIsSyncing(true);
@@ -181,21 +201,25 @@ export function DBProvider({ children }: { children: ReactNode }) {
     if (!isOnline) return;
     const interval = setInterval(async () => {
       try {
-        await flushPendingChanges();
-        const pullResult = await pullRemoteChanges();
-        if (pullResult && (Object.keys(pullResult.changes).length > 0 || Object.keys(pullResult.deletions).length > 0)) {
-          setDb(prev => {
-            const merged = deepMergeDbState(prev, pullResult.changes, pullResult.deletions);
-            persistCache(merged);
-            return merged;
-          });
+        const count = await getPendingCount();
+        if (count > 0) {
+          await flushNow();
+        } else {
+          const pullResult = await pullRemoteChanges();
+          if (pullResult && (Object.keys(pullResult.changes).length > 0 || Object.keys(pullResult.deletions).length > 0)) {
+            setDb(prev => {
+              const merged = deepMergeDbState(prev, pullResult.changes, pullResult.deletions);
+              persistCache(merged);
+              return merged;
+            });
+          }
         }
       } catch {
         // silent
       }
     }, 30000);
     return () => clearInterval(interval);
-  }, [isOnline, persistCache]);
+  }, [isOnline, persistCache, flushNow]);
 
   const handleUpdateDb = useCallback((nextDb: DBState) => {
     incrementalSync(nextDb);

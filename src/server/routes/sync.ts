@@ -5,6 +5,7 @@ import { requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../services/auth.js';
 import { syncService } from '../sync/syncService.js';
 import { syncEngine } from '../sync/syncEngine.js';
+import { supabaseWorker } from '../sync/supabaseWorker.js';
 
 const router = Router();
 
@@ -291,9 +292,12 @@ router.post('/clear-local', authenticateToken, requireRole(['superadmin']), (req
   }
 });
 
-// GET /api/sync/status: Get sync service status
+// GET /api/sync/status: Get sync service + worker status
 router.get('/status', authenticateToken, requireRole(['superadmin']), (req, res) => {
-  res.json(syncService.getStatus());
+  res.json({
+    ...syncService.getStatus(),
+    worker: supabaseWorker.getStatus(),
+  });
 });
 
 // POST /api/sync/trigger: Manually trigger a sync cycle (push + pull)

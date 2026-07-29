@@ -18,6 +18,7 @@ initializeDatabase();
 // Initialize Sync Service (background sync to Supabase)
 import { syncService } from './src/server/sync/syncService.js';
 import { loadLastSyncTimestamps } from './src/server/sync/syncQueue.js';
+import { supabaseWorker } from './src/server/sync/supabaseWorker.js';
 syncService.initialize().then(async () => {
   if (syncService.isOnline()) {
     const trackingCount = loadLastSyncTimestamps().length;
@@ -35,7 +36,8 @@ syncService.initialize().then(async () => {
     console.log(`[SERVER] Sync syncDown: ${pullResult.pulled} pulled, ${pullResult.errors.length} errors`);
   }
   syncService.startBackgroundSync(300000);
-  console.log('[SERVER] Sync service initialized and background sync started');
+  supabaseWorker.start();
+  console.log('[SERVER] Sync service initialized, background sync + Supabase worker started');
 });
 
 // Import Router Modules
