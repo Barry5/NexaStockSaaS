@@ -1,5 +1,6 @@
 import db from '../../database/db.js';
 import { enqueue } from '../../sync/syncQueue.js';
+import { syncService } from '../../sync/syncService.js';
 import type { SyncOperation } from '../../sync/syncQueue.js';
 
 export interface ColumnMap {
@@ -55,6 +56,9 @@ export abstract class BaseService {
 
   protected enqueueSync(operation: SyncOperation, recordId: string, payload: Record<string, unknown>, companyId?: string, deviceId?: string): void {
     enqueue(this.tableName, recordId, operation, payload, companyId, deviceId);
+    if (syncService.isOnline()) {
+      syncService.syncUp().catch(() => {});
+    }
   }
 
   protected getAllRaw<T = any>(tenantId: string, orderBy = ''): T[] {
