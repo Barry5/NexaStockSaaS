@@ -1,8 +1,8 @@
-import db from '../database/db.js';
+﻿import db from '../database/db.js';
 import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, batchDelete } from '../services/supabase/supabaseService.js';
-import { defaultConflictResolver, type ConflictRecord } from './conflictResolver.js';
 import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
+import { TABLE_MAPPINGS } from './syncTables.js';
 import { v4 as uuidv4 } from 'uuid';
 
 export type SyncDirection = 'up' | 'down' | 'both';
@@ -16,59 +16,7 @@ export interface SyncResult {
   duration: number;
 }
 
-interface TableMapping {
-  sqliteName: string;
-  pgName: string;
-  isChild?: boolean;
-  parentTable?: string;
-  parentFk?: string;
-}
 
-// Mapping complet des tables SQLite → PostgreSQL
-const TABLE_MAPPINGS: TableMapping[] = [
-  { sqliteName: 'tenants', pgName: 'tenants' },
-  { sqliteName: 'users', pgName: 'users' },
-  { sqliteName: 'products', pgName: 'products' },
-  { sqliteName: 'product_variants', pgName: 'product_variants' },
-  { sqliteName: 'customers', pgName: 'customers' },
-  { sqliteName: 'suppliers', pgName: 'suppliers' },
-  { sqliteName: 'sales', pgName: 'sales' },
-  { sqliteName: 'sale_items', pgName: 'sale_items' },
-  { sqliteName: 'expenses', pgName: 'expenses' },
-  { sqliteName: 'loans', pgName: 'loans' },
-  { sqliteName: 'repayments', pgName: 'repayments' },
-  { sqliteName: 'loan_installments', pgName: 'loan_installments' },
-  { sqliteName: 'warehouses', pgName: 'warehouses' },
-  { sqliteName: 'stock_transfers', pgName: 'stock_transfers' },
-  { sqliteName: 'invoices', pgName: 'invoices' },
-  { sqliteName: 'invoice_items', pgName: 'invoice_items' },
-  { sqliteName: 'delivery_orders', pgName: 'delivery_orders' },
-  { sqliteName: 'delivery_order_items', pgName: 'delivery_order_items' },
-  { sqliteName: 'payments', pgName: 'payments' },
-  { sqliteName: 'returns', pgName: 'returns' },
-  { sqliteName: 'return_items', pgName: 'return_items' },
-  { sqliteName: 'invoice_audit_log', pgName: 'invoice_audit_log' },
-  { sqliteName: 'affiliates', pgName: 'affiliates' },
-  { sqliteName: 'commission_rules', pgName: 'commission_rules' },
-  { sqliteName: 'commission_ledger', pgName: 'commission_ledger' },
-  { sqliteName: 'commission_payments', pgName: 'commission_payments' },
-  { sqliteName: 'commission_audit', pgName: 'commission_audit' },
-  { sqliteName: 'sale_affiliates', pgName: 'sale_affiliates' },
-  { sqliteName: 'sale_commission_items', pgName: 'sale_commission_items' },
-  { sqliteName: 'audit_logs', pgName: 'audit_logs' },
-  { sqliteName: 'delivery_note_audit', pgName: 'delivery_note_audit' },
-  { sqliteName: 'subscription_invoices', pgName: 'subscription_invoices' },
-  { sqliteName: 'subscription_payments', pgName: 'subscription_payments' },
-  { sqliteName: 'pricing_plans', pgName: 'pricing_plans' },
-  { sqliteName: 'global_saas_settings', pgName: 'global_saas_settings' },
-  { sqliteName: 'gdrive_tokens', pgName: 'gdrive_tokens' },
-  { sqliteName: 'roles', pgName: 'roles' },
-  { sqliteName: 'permissions', pgName: 'permissions' },
-  { sqliteName: 'role_permissions', pgName: 'role_permissions' },
-  { sqliteName: 'user_roles', pgName: 'user_roles' },
-  { sqliteName: 'module_definitions', pgName: 'module_definitions' },
-  { sqliteName: 'tenant_modules', pgName: 'tenant_modules' },
-];
 
 class SyncService {
   private isRunning = false;
@@ -81,9 +29,9 @@ class SyncService {
 
     if (isSupabaseConfigured()) {
       this.online = await checkConnection();
-      console.log(`[SYNC] Supabase ${this.online ? 'connecté' : 'non joignable'}`);
+      console.log(`[SYNC] Supabase ${this.online ? 'connectÃ©' : 'non joignable'}`);
     } else {
-      console.log('[SYNC] Supabase non configuré. Mode SQLite uniquement.');
+      console.log('[SYNC] Supabase non configurÃ©. Mode SQLite uniquement.');
     }
   }
 
@@ -157,7 +105,7 @@ class SyncService {
           await this.upsertToRemote(change.table, record);
         }
         pushed++;
-        pushedIds.push(change.recordId);
+        pushedIds.push(change.changeId);
       } catch (err: any) {
         failed++;
         errors.push(`${change.table}/${change.recordId}: ${err.message}`);
@@ -215,7 +163,7 @@ class SyncService {
     }
 
     if (pulled > 0) {
-      console.log(`[SYNC DOWN] ${pulled} enregistrements récupérés, ${errors.length} erreurs`);
+      console.log(`[SYNC DOWN] ${pulled} enregistrements rÃ©cupÃ©rÃ©s, ${errors.length} erreurs`);
     }
 
     return { pulled, errors };
@@ -248,23 +196,35 @@ class SyncService {
     for (const mapping of TABLE_MAPPINGS) {
       try {
         const client = (await import('../services/supabase/supabaseService.js')).getAdminClient();
-        const { data, error } = await client
-          .from(mapping.pgName)
-          .select('*')
-          .order('id', { ascending: true });
-
-        if (error) {
-          errors.push(`${mapping.sqliteName}: ${error.message}`);
-          continue;
-        }
-        if (!data || data.length === 0) continue;
+        let offset = 0;
+        const pageSize = 100;
+        let hasMore = true;
 
         if (clearLocalBeforeInsert) {
           db.prepare(`DELETE FROM ${mapping.sqliteName}`).run();
         }
 
-        this.upsertBatchToLocal(mapping.sqliteName, data);
-        totalPulled += data.length;
+        while (hasMore) {
+          const { data, error } = await client
+            .from(mapping.pgName)
+            .select('*')
+            .order('id', { ascending: true })
+            .range(offset, offset + pageSize - 1);
+
+          if (error) {
+            errors.push(`${mapping.sqliteName}: ${error.message}`);
+            break;
+          }
+          if (!data || data.length === 0) {
+            hasMore = false;
+          } else {
+            this.upsertBatchToLocal(mapping.sqliteName, data);
+            totalPulled += data.length;
+            offset += data.length;
+            if (data.length < pageSize) hasMore = false;
+          }
+        }
+
         tablesProcessed++;
       } catch (err: any) {
         errors.push(`${mapping.sqliteName}: ${err.message}`);
@@ -311,7 +271,7 @@ class SyncService {
 
   private async upsertToRemote(tableName: string, record: Record<string, unknown>): Promise<void> {
     const mapping = TABLE_MAPPINGS.find(t => t.sqliteName === tableName);
-    if (!mapping) throw new Error(`Table ${tableName} non configurée pour la synchro`);
+    if (!mapping) throw new Error(`Table ${tableName} non configurÃ©e pour la synchro`);
 
     const pgRecord = this.transformToPostgres(tableName, record);
     const result = await batchUpsert(mapping.pgName, [pgRecord], 'legacy_id');
@@ -320,7 +280,7 @@ class SyncService {
 
   private async deleteFromRemote(tableName: string, recordId: string): Promise<void> {
     const mapping = TABLE_MAPPINGS.find(t => t.sqliteName === tableName);
-    if (!mapping) throw new Error(`Table ${tableName} non configurée`);
+    if (!mapping) throw new Error(`Table ${tableName} non configurÃ©e`);
 
     const { getAdminClient } = await import('../services/supabase/supabaseService.js');
     const client = getAdminClient();
@@ -337,7 +297,7 @@ class SyncService {
     const columns = Object.keys(camelRecords[0]).filter(c => c !== 'id');
     const allColumns = ['id', ...columns];
 
-    // Récupérer les colonnes réelles de la table SQLite
+    // RÃ©cupÃ©rer les colonnes rÃ©elles de la table SQLite
     const tableInfo = db.prepare(`PRAGMA table_info(${tableName})`).all() as { name: string }[];
     const existingColumns = new Set(tableInfo.map(c => c.name));
 
@@ -459,7 +419,7 @@ class SyncService {
 
   startBackgroundSync(intervalMs: number = 300000) {
     if (this.intervalId) return;
-    console.log(`[SYNC] Sync automatique activée (intervalle: ${intervalMs / 1000}s)`);
+    console.log(`[SYNC] Sync automatique activÃ©e (intervalle: ${intervalMs / 1000}s)`);
 
     this.intervalId = setInterval(async () => {
       if (this.isRunning) return;
@@ -491,7 +451,7 @@ class SyncService {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-      console.log('[SYNC] Sync automatique arrêtée');
+      console.log('[SYNC] Sync automatique arrÃªtÃ©e');
     }
   }
 

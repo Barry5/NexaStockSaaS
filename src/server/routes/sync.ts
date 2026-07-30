@@ -6,6 +6,7 @@ import { hashPassword } from '../services/auth.js';
 import { syncService } from '../sync/syncService.js';
 import { syncEngine } from '../sync/syncEngine.js';
 import { supabaseWorker } from '../sync/supabaseWorker.js';
+import { SYNC_TABLES } from '../sync/syncTables.js';
 
 const router = Router();
 
@@ -180,18 +181,7 @@ export function compileCompleteState(): any {
   };
 }
 
-const SYNC_TABLES = [
-  'tenants', 'users', 'products', 'product_variants', 'customers', 'suppliers',
-  'sales', 'sale_items', 'expenses', 'loans', 'repayments', 'loan_installments',
-  'warehouses', 'stock_transfers', 'invoices', 'invoice_items',
-  'delivery_orders', 'delivery_order_items', 'payments', 'returns', 'return_items',
-  'affiliates', 'commission_rules', 'commission_ledger', 'commission_payments',
-  'commission_audit', 'sale_affiliates', 'sale_commission_items',
-  'subscription_invoices', 'subscription_payments', 'pricing_plans',
-  'global_saas_settings', 'audit_logs', 'invoice_audit_log',
-  'delivery_note_audit', 'gdrive_tokens', 'roles', 'permissions',
-  'role_permissions', 'user_roles', 'module_definitions', 'tenant_modules',
-];
+
 
 // GET /api/sync/changes?since=ISO_TIMESTAMP - Delta sync endpoint
 router.get('/changes', (req, res, next) => {

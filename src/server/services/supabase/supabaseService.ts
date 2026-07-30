@@ -1,7 +1,7 @@
-import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
 
-let adminClient: ReturnType<typeof createClient> | null = null;
-let anonClient: ReturnType<typeof createClient> | null = null;
+let adminClient: any = null;
+let anonClient: any = null;
 
 function getSupabaseUrl(): string {
   return process.env.SUPABASE_URL || '';
@@ -15,12 +15,12 @@ function getAnonKey(): string {
   return process.env.SUPABASE_ANON_KEY || '';
 }
 
-export function getAdminClient() {
+export function getAdminClient(): any {
   if (!adminClient) {
     const url = getSupabaseUrl();
     const key = getServiceKey();
     if (!url || !key) {
-      throw new Error('Supabase non configuré. Vérifiez SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY');
+      throw new Error('Supabase non configurÃ©. VÃ©rifiez SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY');
     }
     adminClient = createClient(url, key, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -30,12 +30,12 @@ export function getAdminClient() {
   return adminClient;
 }
 
-export function getClient() {
+export function getClient(): any {
   if (!anonClient) {
     const url = getSupabaseUrl();
     const key = getAnonKey();
     if (!url || !key) {
-      throw new Error('Supabase non configuré. Vérifiez SUPABASE_URL et SUPABASE_ANON_KEY');
+      throw new Error('Supabase non configurÃ©. VÃ©rifiez SUPABASE_URL et SUPABASE_ANON_KEY');
     }
     anonClient = createClient(url, key, {
       db: { schema: 'public' },
@@ -52,7 +52,7 @@ export function isSupabaseConfigured(): boolean {
 export async function checkConnection(): Promise<boolean> {
   try {
     if (!isSupabaseConfigured()) {
-      console.log('[SUPABASE] Configuration manquante (SUPABASE_URL ou clés absent(e)s).');
+      console.log('[SUPABASE] Configuration manquante (SUPABASE_URL ou clÃ©s absent(e)s).');
       return false;
     }
     const { data, error } = await getAdminClient()

@@ -1,4 +1,4 @@
-import db from '../database/db.js';
+﻿import db from '../database/db.js';
 import { getAdminClient, isSupabaseConfigured } from './supabase/supabaseService.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -92,7 +92,7 @@ export class MigrationService {
         }
       }
     }
-    console.log(`[MIGRATION] Carte UUID globale: ${this.globalUuidMap.size} entrées`);
+    console.log(`[MIGRATION] Carte UUID globale: ${this.globalUuidMap.size} entrÃ©es`);
   }
 
   private resolveFk(value: any): any {
@@ -102,7 +102,7 @@ export class MigrationService {
 
   private async clearDestination(): Promise<void> {
     console.log('[MIGRATION] Nettoyage de la destination PostgreSQL...');
-    const client = getAdminClient();
+    const client = getAdminClient() as any;
     const reversed = [...this.tableConfigs].sort((a, b) => b.order - a.order);
     for (const cfg of reversed) {
       let error: any;
@@ -112,7 +112,7 @@ export class MigrationService {
         ({ error } = await client.from(cfg.pg).delete().neq(cfg.conflictColumn, '00000000-0000-0000-0000-000000000000'));
       }
       if (error) console.error(`[MIGRATION] Erreur nettoyage ${cfg.pg}: ${error.message}`);
-      else console.log(`[MIGRATION]   \u2713 ${cfg.pg} vidé`);
+      else console.log(`[MIGRATION]   \u2713 ${cfg.pg} vidÃ©`);
     }
   }
 
@@ -123,11 +123,11 @@ export class MigrationService {
     totalErrors: number;
   }> {
     if (!isSupabaseConfigured()) {
-      throw new Error('Supabase non configuré. Vérifiez SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY');
+      throw new Error('Supabase non configurÃ©. VÃ©rifiez SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY');
     }
 
     if (this.isRunning) {
-      throw new Error('Migration déjà en cours');
+      throw new Error('Migration dÃ©jÃ  en cours');
     }
 
     this.isRunning = true;
@@ -185,7 +185,7 @@ export class MigrationService {
     if (rows.length === 0) return;
 
     progress.status = 'running';
-    const client = getAdminClient();
+    const client = getAdminClient() as any;
     const batchSize = 50;
 
     for (let i = 0; i < rows.length; i += batchSize) {
@@ -205,7 +205,7 @@ export class MigrationService {
       }
     }
 
-    console.log(`[MIGRATION] ${cfg.sqlite}: ${progress.migrated}/${progress.total} migrés`);
+    console.log(`[MIGRATION] ${cfg.sqlite}: ${progress.migrated}/${progress.total} migrÃ©s`);
   }
 
   private transformRow(row: Record<string, any>, cfg: TableConfig): Record<string, any> {

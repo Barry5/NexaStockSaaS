@@ -1,4 +1,4 @@
-import { BaseService } from './baseService.js';
+﻿import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
 
 function genId(p: string) { return `${p}-${Date.now()}-${Math.floor(Math.random() * 10000)}`; }
@@ -26,18 +26,18 @@ export class CommissionService extends BaseService {
 
   createAffiliate(data: any, tenantId: string, userId?: string, userName?: string): any {
     const { firstName, lastName, phone, email, address, city, country, company, idNumber, notes, photo } = data;
-    if (!firstName || !lastName) throw new Error('Prénom et nom requis');
+    if (!firstName || !lastName) throw new Error('PrÃ©nom et nom requis');
     const id = genId('aff');
     const code = `APP-${String(Date.now()).slice(-6)}`;
     const t = now();
     db.prepare(`
       INSERT INTO affiliates (id, code, firstName, lastName, photo, phone, email, address, city, country, company, idNumber, status, notes, tenantId, createdAt, updatedAt)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)
-    `).run(id, code, firstName, lastName, photo || null, phone || null, email || null, address || null, city || null, country || 'Guinée', company || null, idNumber || null, notes || null, tenantId, t, t);
-    this.addAudit(id, 'AFFILIATE_CREATED', `Apporteur ${firstName} ${lastName} créé`, null, null, userId, userName, tenantId);
+    `).run(id, code, firstName, lastName, photo || null, phone || null, email || null, address || null, city || null, country || 'GuinÃ©e', company || null, idNumber || null, notes || null, tenantId, t, t);
+    this.addAudit(id, 'AFFILIATE_CREATED', `Apporteur ${firstName} ${lastName} crÃ©Ã©`, null, null, userId, userName, tenantId);
     this.enqueueSync('CREATE', id, { id, code, firstName, lastName, tenantId, legacy_id: id, _table: 'affiliates' }, tenantId);
     const aff = db.prepare('SELECT * FROM affiliates WHERE id = ?').get(id) as any;
-    return { ...aff, balance: 0, notification: { text: `✅ Apporteur ${firstName} ${lastName} (${code}) créé avec succès`, type: 'success' as const } };
+    return { ...aff, balance: 0, notification: { text: `âœ… Apporteur ${firstName} ${lastName} (${code}) crÃ©Ã© avec succÃ¨s`, type: 'success' as const } };
   }
 
   updateAffiliate(id: string, data: any, userId?: string, userName?: string): any | null {
@@ -49,9 +49,9 @@ export class CommissionService extends BaseService {
     db.prepare(`UPDATE affiliates SET firstName=?, lastName=?, photo=?, phone=?, email=?, address=?, city=?, country=?, company=?, idNumber=?, status=?, notes=?, updatedAt=? WHERE id=?`)
       .run(firstName || aff.firstName, lastName || aff.lastName, photo !== undefined ? photo : aff.photo, phone !== undefined ? phone : aff.phone, email !== undefined ? email : aff.email, address !== undefined ? address : aff.address, city !== undefined ? city : aff.city, country || aff.country, company !== undefined ? company : aff.company, idNumber !== undefined ? idNumber : aff.idNumber, status || aff.status, notes !== undefined ? notes : aff.notes, t, aff.id);
     if (status && status !== oldStatus) {
-      this.addAudit(aff.id, 'AFFILIATE_STATUS_CHANGED', `Statut changé: ${oldStatus} -> ${status}`, oldStatus, status, userId, userName, aff.tenantId);
+      this.addAudit(aff.id, 'AFFILIATE_STATUS_CHANGED', `Statut changÃ©: ${oldStatus} -> ${status}`, oldStatus, status, userId, userName, aff.tenantId);
     }
-    this.addAudit(aff.id, 'AFFILIATE_UPDATED', 'Fiche apporteur modifiée', null, null, userId, userName, aff.tenantId);
+    this.addAudit(aff.id, 'AFFILIATE_UPDATED', 'Fiche apporteur modifiÃ©e', null, null, userId, userName, aff.tenantId);
     this.enqueueSync('UPDATE', id, { ...data, legacy_id: id }, aff.tenantId);
     const updated = db.prepare('SELECT * FROM affiliates WHERE id = ?').get(aff.id) as any;
     return { ...updated, balance: this.getAffiliateBalance(aff.id) };
@@ -101,7 +101,7 @@ export class CommissionService extends BaseService {
     const { affiliateId, type, reference, referenceType, description, credit, debit, invoiceId, invoiceNumber, customerName, productName, quantity, sellPrice, minPrice, commissionAmount, status } = data;
     const aff = db.prepare('SELECT * FROM affiliates WHERE id = ?').get(affiliateId) as any;
     if (!aff) throw new Error('Apporteur introuvable');
-    if (aff.tenantId !== tenantId) throw new Error('Non autorisé');
+    if (aff.tenantId !== tenantId) throw new Error('Non autorisÃ©');
     const id = genId('ledger');
     const currentBalance = this.getAffiliateBalance(affiliateId);
     const entryCredit = credit || 0;
@@ -174,7 +174,7 @@ export class CommissionService extends BaseService {
       this.enqueueSync('CREATE', id, { id, ...e, tenantId, legacy_id: id, _table: 'commission_ledger' }, tenantId);
     }
 
-    this.addAudit(affiliateId, 'COMMISSION_CALCULATED', `${entries.length} commission(s) calculée(s) pour facture ${invoiceNumber}`, null, null, userId, userName, tenantId);
+    this.addAudit(affiliateId, 'COMMISSION_CALCULATED', `${entries.length} commission(s) calculÃ©e(s) pour facture ${invoiceNumber}`, null, null, userId, userName, tenantId);
     const affName = `${aff.firstName} ${aff.lastName}`;
     const updatedBalance = this.getAffiliateBalance(affiliateId);
     const oldBalance = updatedBalance - entries.reduce((s, e) => s + e.credit, 0);
@@ -182,10 +182,10 @@ export class CommissionService extends BaseService {
     const crossed = thresholds.find(t => oldBalance < t && updatedBalance >= t);
     let notif: { text: string; type: string };
     if (entries.length > 0) {
-      notif = { text: `💰 ${entries.length} commission(s) pour ${affName} sur facture ${invoiceNumber}`, type: 'success' };
-      if (crossed) notif.text = `🎯 Seuil des ${new Intl.NumberFormat('fr-FR').format(crossed)} GNF atteint ! ${notif.text}`;
+      notif = { text: `ðŸ’° ${entries.length} commission(s) pour ${affName} sur facture ${invoiceNumber}`, type: 'success' };
+      if (crossed) notif.text = `ðŸŽ¯ Seuil des ${new Intl.NumberFormat('fr-FR').format(crossed)} GNF atteint ! ${notif.text}`;
     } else {
-      notif = { text: `ℹ️ Aucune commission pour ${affName} sur facture ${invoiceNumber}`, type: 'info' };
+      notif = { text: `â„¹ï¸ Aucune commission pour ${affName} sur facture ${invoiceNumber}`, type: 'info' };
     }
     return { count: entries.length, entries, notification: notif, balance: updatedBalance };
   }
@@ -199,7 +199,7 @@ export class CommissionService extends BaseService {
     if (!affiliateId || !amount || amount <= 0) throw new Error('Apporteur et montant requis');
     const aff = db.prepare('SELECT * FROM affiliates WHERE id = ?').get(affiliateId) as any;
     if (!aff) throw new Error('Apporteur introuvable');
-    if (aff.tenantId !== tenantId) throw new Error('Non autorisé');
+    if (aff.tenantId !== tenantId) throw new Error('Non autorisÃ©');
 
     const ids = ledgerIds || [];
     const balance = this.getAffiliateBalance(affiliateId);
@@ -229,9 +229,9 @@ export class CommissionService extends BaseService {
     });
 
     this.enqueueSync('CREATE', payId, { id: payId, reference: ref, affiliateId, amount, tenantId, legacy_id: payId, _table: 'commission_payments' }, tenantId);
-    const payment = db.prepare('SELECT * FROM commission_payments WHERE id = ?').get(payId);
+    const payment = db.prepare('SELECT * FROM commission_payments WHERE id = ?').get(payId) as Record<string, unknown>;
     const affName = `${aff.firstName} ${aff.lastName}`;
-    return { ...payment, notification: { text: `✅ Paiement commission : ${new Intl.NumberFormat('fr-FR').format(amount)} GNF versés à ${affName} (${method})`, type: 'success' as const } };
+    return { ...payment, notification: { text: `âœ… Paiement commission : ${new Intl.NumberFormat('fr-FR').format(amount)} GNF versÃ©s Ã  ${affName} (${method})`, type: 'success' as const } };
   }
 
   getDashboard(tenantId: string): any {

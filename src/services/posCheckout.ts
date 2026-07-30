@@ -1,5 +1,5 @@
-export interface CartLine {
-  product: { id: string; quantity: number; sellPrice: number };
+﻿export interface CartLine {
+  product: { id: string; name: string; quantity: number; sellPrice: number };
   quantity: number;
   negotiatedPrice: number;
   lineDiscount: number;

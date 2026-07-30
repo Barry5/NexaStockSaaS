@@ -1,6 +1,7 @@
-import db from '../database/db.js';
+﻿import db from '../database/db.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as SyncQueue from './syncQueue.js';
+import { SYNC_TABLE_SET, SYNC_TABLES } from './syncTables.js';
 
 export type SyncOperation = 'CREATE' | 'UPDATE' | 'DELETE';
 
@@ -36,19 +37,6 @@ export interface PullResult {
   deletions: Record<string, string[]>;
   timestamp: string;
 }
-
-const SYNC_TABLES = [
-  'tenants', 'users', 'products', 'product_variants', 'customers', 'suppliers',
-  'sales', 'sale_items', 'expenses', 'loans', 'repayments', 'loan_installments',
-  'warehouses', 'stock_transfers', 'invoices', 'invoice_items',
-  'delivery_orders', 'delivery_order_items', 'payments', 'returns', 'return_items',
-  'affiliates', 'commission_rules', 'commission_ledger', 'commission_payments',
-  'commission_audit', 'sale_affiliates', 'sale_commission_items',
-  'subscription_invoices', 'subscription_payments', 'pricing_plans',
-  'global_saas_settings', 'audit_logs', 'invoice_audit_log',
-  'delivery_note_audit', 'gdrive_tokens', 'roles', 'permissions',
-  'role_permissions', 'user_roles', 'module_definitions', 'tenant_modules',
-];
 
 export class SyncEngine {
   recordChange(
@@ -106,8 +94,8 @@ export class SyncEngine {
         try {
           const { table, recordId, operation, data, version, deviceId, companyId } = change;
 
-          if (!SYNC_TABLES.includes(table)) {
-            result.errors.push({ table, recordId, error: `Table ${table} non autorisée` });
+          if (!SYNC_TABLE_SET.has(table)) {
+            result.errors.push({ table, recordId, error: `Table ${table} non autorisÃ©e` });
             continue;
           }
 
@@ -233,7 +221,7 @@ export class SyncEngine {
     return result;
   }
 
-  getChangesForSupabase(): { table: string; recordId: string; operation: string; data: string }[] {
+  getChangesForSupabase(): { changeId: string; table: string; recordId: string; operation: string; data: string }[] {
     const items = db.prepare(`
       SELECT c.* FROM sync_changelog c
       WHERE c.pushed_to_supabase = 0
@@ -242,6 +230,7 @@ export class SyncEngine {
     `).all() as any[];
 
     return items.map(item => ({
+      changeId: item.id,
       table: item.table_name,
       recordId: item.record_id,
       operation: item.operation,

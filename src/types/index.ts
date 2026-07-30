@@ -129,7 +129,7 @@ export interface Sale {
   isReturned?: number;
   customFeeLabel?: string;
   abandonReason?: string;
-  invoiceStatus?: 'Brouillon' | 'Validée' | 'Annulée' | 'Archivée';
+  invoiceStatus?: 'Brouillon' | 'ValidÃ©e' | 'AnnulÃ©e' | 'ArchivÃ©e';
   paymentStatus?: 'Non payé' | 'Partiellement payé' | 'Payé' | 'Remboursé';
   deliveryStatus?: 'Non livrée' | 'Partiellement livrée' | 'Livrée' | 'Retournée';
   creditStatus?: 'Pas de crédit' | 'Crédit actif' | 'Crédit en retard' | 'Crédit soldé';
@@ -647,7 +647,7 @@ export interface RolePermission {
   permission?: Permission;
 }
 
-export interface UserRole {
+export interface UserRoleAssignment {
   id: string;
   userId: string;
   roleId: string;

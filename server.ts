@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -18,7 +18,6 @@ initializeDatabase();
 // Initialize Sync Service (background sync to Supabase)
 import { syncService } from './src/server/sync/syncService.js';
 import { loadLastSyncTimestamps } from './src/server/sync/syncQueue.js';
-import { supabaseWorker } from './src/server/sync/supabaseWorker.js';
 syncService.initialize().then(async () => {
   if (syncService.isOnline()) {
     const trackingCount = loadLastSyncTimestamps().length;
@@ -36,8 +35,7 @@ syncService.initialize().then(async () => {
     console.log(`[SERVER] Sync syncDown: ${pullResult.pulled} pulled, ${pullResult.errors.length} errors`);
   }
   syncService.startBackgroundSync(300000);
-  supabaseWorker.start();
-  console.log('[SERVER] Sync service initialized, background sync + Supabase worker started');
+  console.log('[SERVER] Sync service initialized, background sync started');
 });
 
 // Import Router Modules
@@ -95,7 +93,7 @@ import cookieParser from 'cookie-parser';
 app.use(express.json({ limit: '50mb' }));
 app.use(cookieParser());
 
-// PWA routes — serve from dist with correct MIME types (works in both dev & prod)
+// PWA routes â€” serve from dist with correct MIME types (works in both dev & prod)
 app.get('/sw.js', (_req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Service-Worker-Allowed', '/');
@@ -362,7 +360,7 @@ async function startServer() {
       },
     }));
 
-    // SPA fallback — serve index.html for all non-API, non-file routes
+    // SPA fallback â€” serve index.html for all non-API, non-file routes
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

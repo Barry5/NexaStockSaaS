@@ -1,15 +1,14 @@
-import { getAdminClient, batchUpsert, isSupabaseConfigured } from '../services/supabase/supabaseService.js';
-import type { Repository } from './baseRepository.js';
+﻿import { getAdminClient, batchUpsert, isSupabaseConfigured } from '../services/supabase/supabaseService.js';
 import type { Syncable } from './baseRepository.js';
 
-export class RemoteRepository<T extends Syncable> implements Repository<T> {
+export class RemoteRepository<T extends Syncable> {
   constructor(
     protected tableName: string,
     protected idColumn: string = 'id'
   ) {}
 
   private get client() {
-    return getAdminClient();
+    return getAdminClient() as any;
   }
 
   private isConfigured(): boolean {
@@ -36,7 +35,7 @@ export class RemoteRepository<T extends Syncable> implements Repository<T> {
   }
 
   async create(data: Partial<T>): Promise<T> {
-    if (!this.isConfigured()) throw new Error('Supabase non configuré');
+    if (!this.isConfigured()) throw new Error('Supabase non configurÃ©');
     const now = new Date().toISOString();
     const record = {
       ...data,

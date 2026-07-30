@@ -95,6 +95,7 @@ const FIELD_TO_TABLE: Record<string, string> = {
   commissionLedger: 'commission_ledger', commissionPayments: 'commission_payments',
   commissionAudit: 'commission_audit', invoiceAuditLogs: 'invoice_audit_log',
   deliveryNoteAudit: 'delivery_note_audit',
+  gdriveTokens: 'gdrive_tokens',
 };
 
 const ARRAY_FIELDS = Object.keys(FIELD_TO_TABLE);
@@ -137,11 +138,12 @@ export function extractChanges(prevDb: DBState, nextDb: DBState): SyncChange[] {
   return changes;
 }
 
-let syncInProgress = false;
+let pushInProgress = false;
+let pullInProgress = false;
 let lastPullTimestamp = new Date(0).toISOString();
 
 export function enqueueChange(change: SyncChange) {
-  dexieEnqueueBatch([change]).catch(() => {});
+  dexieEnqueueBatch([change]).catch(err => console.error('[SYNC] enqueueChange error:', err));
 }
 
 export async function getPendingChanges(): Promise<SyncChange[]> {
@@ -159,8 +161,8 @@ export async function getPendingCount(): Promise<number> {
 export async function flushPendingChanges(flushBatchSize: number = 50): Promise<PushResult | null> {
   const changes = await dequeuePendingChanges(flushBatchSize);
   if (changes.length === 0) return null;
-  if (syncInProgress) return null;
-  syncInProgress = true;
+  if (pushInProgress) return null;
+  pushInProgress = true;
 
   try {
     const batch = changes.map(c => ({
@@ -195,31 +197,31 @@ export async function flushPendingChanges(flushBatchSize: number = 50): Promise<
 
     return result;
   } finally {
-    syncInProgress = false;
+    pushInProgress = false;
   }
+}
+
+async function loadLastPullTimestamp(): Promise<string> {
+  const stored = await getMeta('sync_last_pull');
+  return stored || new Date(0).toISOString();
 }
 
 export async function pullRemoteChanges(): Promise<PullResult | null> {
-  if (syncInProgress) return null;
-  syncInProgress = true;
+  if (pullInProgress) return null;
+  pullInProgress = true;
 
   try {
-    const result = await pullChanges(lastPullTimestamp);
+    const since = await loadLastPullTimestamp();
+    const result = await pullChanges(since);
     if (result.timestamp) {
-      lastPullTimestamp = result.timestamp;
-      await setMeta('sync_last_pull', lastPullTimestamp);
+      await setMeta('sync_last_pull', result.timestamp);
     }
     return result;
   } finally {
-    syncInProgress = false;
+    pullInProgress = false;
   }
 }
 
-export function getLastPullTimestamp(): string {
-  return lastPullTimestamp;
+export async function getLastPullTimestamp(): Promise<string> {
+  return loadLastPullTimestamp();
 }
-
-(async () => {
-  const stored = await getMeta('sync_last_pull');
-  if (stored) lastPullTimestamp = stored;
-})();
