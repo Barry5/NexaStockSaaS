@@ -184,6 +184,50 @@ export function compileCompleteState(): any {
 
 
 
+// Inverse mapping of FIELD_TO_TABLE (src/api/sync.ts): SQLite table name ->
+// key in the client DBState. Used to compute deletions to propagate.
+const CLIENT_FIELD_BY_TABLE: Record<string, string> = {
+  tenants: 'tenants', users: 'users', products: 'products', customers: 'customers',
+  suppliers: 'suppliers', expenses: 'expenses', loans: 'loans',
+  warehouses: 'warehouses', stock_transfers: 'transfers', audit_logs: 'auditLogs',
+  subscription_invoices: 'subscriptionInvoices', product_variants: 'variants',
+  subscription_payments: 'subscriptionPayments', pricing_plans: 'pricingPlans',
+  invoices: 'invoices', delivery_orders: 'deliveryOrders',
+  payments: 'payments', returns: 'returns',
+  affiliates: 'affiliates', commission_rules: 'commissionRules',
+  commission_ledger: 'commissionLedger', commission_payments: 'commissionPayments',
+  commission_audit: 'commissionAudit', invoice_audit_log: 'invoiceAuditLogs',
+};
+
+// Computes deletions (ids present locally after the merge but missing from the
+// client state received by the full-state POST /api/sync) and enqueues them via
+// syncEngine.pushChanges to propagate towards Supabase.
+// Fixes coherence: the legacy INSERT OR REPLACE merge NEVER propagated deletes
+// -> phantom rows persisting on PG.
+function enqueueStateDeletions(clientState: Record<string, unknown>): number {
+  const changes: any[] = [];
+  const tenantId = (clientState.__tenantId as string) || '';
+  let pushed = 0;
+
+  for (const [table, clientField] of Object.entries(CLIENT_FIELD_BY_TABLE)) {
+    const clientArr = (clientState[clientField] as any[] | undefined) || [];
+    const clientIds = new Set(clientArr.map(r => r?.id).filter(Boolean));
+
+    const rows = db.prepare(`SELECT id FROM ${table}`).all() as { id: string }[];
+    for (const { id } of rows) {
+      if (id && !clientIds.has(id)) {
+        changes.push({ table, recordId: id, operation: 'DELETE', data: { id, tenantId: tenantId || undefined }, version: 0 });
+        pushed++;
+      }
+    }
+  }
+
+  if (changes.length > 0) {
+    syncEngine.pushChanges(changes);
+  }
+  return pushed;
+}
+
 // GET /api/sync/changes?since=ISO_TIMESTAMP - Delta sync endpoint
 router.get('/changes', (req, res, next) => {
   try {
@@ -908,7 +952,11 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res, next)
     const consolidatedState = compileCompleteState();
     res.json(consolidatedState);
 
-    // For backward-compat full-state sync: push to Supabase via both queue and changelog
+    // For backward-compat full-state sync: compute + enqueue deletions that the
+    // legacy INSERT OR REPLACE merge would have silently dropped, then push.
+    let deletionPushed = 0;
+    try { deletionPushed = enqueueStateDeletions(clientState); } catch (e) { console.error('[SYNC POST] enqueueStateDeletions error:', e); }
+
     syncService.syncUp()
       .then(r1 => {
         if (r1.pushed > 0 || r1.failed > 0) {
