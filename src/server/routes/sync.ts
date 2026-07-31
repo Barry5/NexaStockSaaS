@@ -318,7 +318,11 @@ const WIPE_TABLES = [
   'gdrive_tokens', 'users', 'tenants',
 ];
 
-const WIPE_SYNC_TABLES = ['sync_queue', 'sync_changelog', 'sync_deletions', 'sync_tracking', 'sync_uuid_map'];
+const WIPE_SYNC_TABLES = ['sync_queue', 'sync_changelog', 'sync_deletions', 'sync_tracking'];
+// NB: sync_uuid_map est VOLONTAIREMENT conservé : les tables système (rôles,
+// permissions, forfaits...) gardent leurs UUID côté Supabase. Si le mapping
+// était vidé, l'upsert régénérerait de nouveaux UUID et réécrirait les clés
+// primaires référencées par role_permissions/user_roles (violation FK).
 
 function wipeSupabaseData(): Promise<{ tables: number; errors: string[] }> {
   const admin = getAdminClient();
@@ -328,9 +332,17 @@ function wipeSupabaseData(): Promise<{ tables: number; errors: string[] }> {
   return WIPE_TABLES.reduce<Promise<number>>(async (acc, table) => {
     const count = await acc;
     try {
-      // gdrive_tokens n'a pas de legacy_id
-      const column = table === 'gdrive_tokens' ? 'tenant_id' : 'legacy_id';
-      const { error } = await admin.from(table).delete().neq(column, '__never__');
+      // gdrive_tokens n'a pas de legacy_id (clé: tenant_id UUID NOT NULL) ;
+      // tenant_modules n'a pas de legacy_id (clé: id UUID).
+      let query: any;
+      if (table === 'gdrive_tokens') {
+        query = admin.from(table).delete().not('tenant_id', 'is', null);
+      } else if (table === 'tenant_modules') {
+        query = admin.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      } else {
+        query = admin.from(table).delete().neq('legacy_id', '__never__');
+      }
+      const { error } = await query;
       if (error) errors.push(`${table}: ${error.message}`);
       else tables = count + 1;
     } catch (e: any) {

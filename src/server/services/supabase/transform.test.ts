@@ -6,7 +6,7 @@ import path from 'path';
 let transform: any;
 let tempDir: string;
 
-describe('transformToPostgres : exclusion des colonnes absentes du schéma PG', () => {
+describe('transformToPostgres : exclusion et ommission conformes au schéma PG', () => {
   beforeAll(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexastock-transform-'));
     process.env.DB_PATH = path.join(tempDir, 'database.db');
@@ -35,25 +35,44 @@ describe('transformToPostgres : exclusion des colonnes absentes du schéma PG', 
     expect(pg.updated_at).toBeDefined();
   });
 
-  it('exclut updated_at et created_at pour permissions (schéma PG sans horodatage)', () => {
+  it('exclut updated_at pour permissions (PG n\'a que created_at), mais garde created_at non-null', () => {
     const pg = transform('permissions', {
       id: 'perm-products-view', key: 'products.view', name: 'Voir produits',
       version: 1, updatedAt: '2026-07-31T00:00:00Z', createdAt: '2026-07-31T00:00:00Z',
     });
     expect(pg.version).toBeUndefined();
     expect(pg.updated_at).toBeUndefined();
-    expect(pg.created_at).toBeUndefined();
+    expect(pg.created_at).toBe('2026-07-31T00:00:00Z');
     expect(pg.key).toBe('products.view');
   });
 
-  it('exclut updated_at et created_at pour module_definitions', () => {
+  it('exclut updated_at pour module_definitions', () => {
     const pg = transform('module_definitions', {
       key: 'dashboard', label: 'Tableau de bord',
       version: 1, updatedAt: '2026-07-31T00:00:00Z', createdAt: '2026-07-31T00:00:00Z',
     });
     expect(pg.updated_at).toBeUndefined();
-    expect(pg.created_at).toBeUndefined();
     expect(pg.label).toBe('Tableau de bord');
+  });
+
+  it('omet created_at/updated_at nulls (PG: NOT NULL DEFAULT NOW()) au lieu d\'envoyer NULL', () => {
+    const pg = transform('pricing_plans', {
+      id: 'plan-free', name: 'Free', price: 0, version: 1,
+      createdAt: null, updatedAt: null, categoryId: null,
+    });
+    expect(pg.created_at).toBeUndefined();
+    expect(pg.updated_at).toBeUndefined();
+    expect(pg.category_id).toBeNull();
+    expect(pg.legacy_id).toBe('plan-free');
+  });
+
+  it('garde updated_at pour roles (PG a created_at ET updated_at)', () => {
+    const pg = transform('roles', {
+      id: 'r-owner', name: 'owner', label: 'Propriétaire',
+      version: 1, updatedAt: '2026-07-31T00:00:00Z',
+    });
+    expect(pg.updated_at).toBe('2026-07-31T00:00:00Z');
+    expect(pg.version).toBeUndefined();
   });
 
   it('garde updated_at pour les tables dont le schéma PG l\'a (ex: tenants)', () => {

@@ -16,16 +16,16 @@ export const NO_LEGACY_ID_TABLES = new Set([
 //   mais n'existe sur aucune table PG (PostgREST rejette le batch entier).
 const ALWAYS_EXCLUDED_COLUMNS = new Set(['version']);
 
-// Colonnes SQLite absentes du schéma PG pour certaines tables
-// (créées sans horodatage côté PostgreSQL). Si la colonne existe en PG,
-// l'exclusion la laisse simplement NULL : sans danger.
+// Colonnes SQLite absentes du schéma PG pour certaines tables.
+// D'après 001_full_schema.sql, seules ces tables n'ont PAS de colonne
+// updated_at en PostgreSQL (elles n'ont que created_at).
 const TABLE_EXCLUDED_COLUMNS: Record<string, Set<string>> = {
-  permissions: new Set(['updated_at', 'created_at']),
-  module_definitions: new Set(['updated_at', 'created_at']),
-  tenant_modules: new Set(['updated_at', 'created_at']),
-  roles: new Set(['updated_at', 'created_at']),
-  role_permissions: new Set(['updated_at', 'created_at']),
-  user_roles: new Set(['updated_at', 'created_at']),
+  permissions: new Set(['updated_at']),
+  module_definitions: new Set(['updated_at']),
+  tenant_modules: new Set(['updated_at']),
+  role_permissions: new Set(['updated_at']),
+  user_roles: new Set(['updated_at']),
+  plan_modules: new Set(['updated_at']),
 };
 
 export function getConflictColumn(tableName: string): string {
@@ -116,6 +116,10 @@ export function transformToPostgres(tableName: string, record: Record<string, un
     if (skipKeys.has(key)) continue;
     const pgKey = key === 'tenantId' ? 'tenant_id' : key === 'legacy_id' ? 'legacy_id' : camelToSnake(key);
     if (value === null || value === undefined) {
+      // Les colonnes created_at/updated_at sont NOT NULL DEFAULT NOW() en PG :
+      // les omettre (plutôt que d'envoyer NULL) laisse PostgreSQL appliquer son
+      // DEFAULT. Les autres colonnes restent NULL explicite (nullable en PG).
+      if (pgKey === 'created_at' || pgKey === 'updated_at') continue;
       pg[pgKey] = null;
       continue;
     }
