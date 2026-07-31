@@ -290,6 +290,18 @@ router.get('/status', authenticateToken, requireRole(['superadmin']), (req, res)
   });
 });
 
+// GET /api/sync/failed: List failed sync queue items with their errors (superadmin debug)
+router.get('/failed', authenticateToken, requireRole(['superadmin']), (req, res) => {
+  const items = db.prepare(`
+    SELECT id, table_name, record_id, operation, retry_count, max_retries, status, last_error, created_at, device_id, company_id
+    FROM sync_queue
+    WHERE status = 'failed'
+    ORDER BY created_at ASC
+    LIMIT 200
+  `).all() as any[];
+  res.json({ count: items.length, items });
+});
+
 // POST /api/sync/trigger: Manually trigger a sync cycle (push + pull)
 router.post('/trigger', authenticateToken, requireRole(['superadmin']), async (req, res, next) => {
   try {
