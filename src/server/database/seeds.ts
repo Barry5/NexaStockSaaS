@@ -2,9 +2,37 @@ import { Database } from 'better-sqlite3';
 import bcrypt from 'bcrypt';
 
 export function seed(db: Database) {
+  const seedPlanModules = () => {
+    const planModulesSeed: { planId: string; modules: string[] }[] = [
+      { planId: 'plan-free', modules: ['dashboard', 'products', 'sales', 'customers', 'expenses', 'invoices'] },
+      { planId: 'plan-standard', modules: ['dashboard', 'products', 'sales', 'customers', 'suppliers', 'expenses', 'invoices', 'warehouses', 'reports', 'users', 'settings', 'loans'] },
+      { planId: 'plan-premium', modules: ['dashboard', 'products', 'sales', 'customers', 'suppliers', 'expenses', 'loans', 'invoices', 'commissions', 'users', 'settings', 'warehouses', 'reports', 'ai', 'transfer'] },
+    ];
+
+    const existingPlans = db.prepare('SELECT id FROM pricing_plans').all() as { id: string }[];
+    const existingPlanIds = new Set(existingPlans.map(p => p.id));
+    if (existingPlanIds.size === 0) return;
+
+    const insertPlanModule = db.prepare(`
+      INSERT OR IGNORE INTO plan_modules (id, planId, moduleKey, enabled)
+      VALUES (?, ?, ?, 1)
+    `);
+
+    const now = Date.now();
+    let seq = 0;
+    for (const pm of planModulesSeed) {
+      if (!existingPlanIds.has(pm.planId)) continue;
+      for (const mk of pm.modules) {
+        insertPlanModule.run(`pm-${now}-${seq}`, pm.planId, mk);
+        seq++;
+      }
+    }
+  };
+
   const superadminExists = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'superadmin'").get() as { count: number };
 
   if (superadminExists.count > 0) {
+    seedPlanModules();
     console.log('Superadmin exists. Skipping seed.');
     return;
   }
@@ -51,4 +79,6 @@ export function seed(db: Database) {
   });
 
   transaction();
+
+  seedPlanModules();
 }

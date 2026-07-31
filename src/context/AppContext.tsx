@@ -3,6 +3,7 @@ import type { TabType, Tenant, User, SubscriptionPlan } from '../types';
 import { loadSession, saveSession } from '../lib/session';
 import { createPlanUpdateMessage, createTenantSwitchMessage, createUserSwitchMessage } from '../lib/appSession';
 import { DBProvider, useDB } from './DBContext';
+import { resetModuleCache } from '../hooks/useModules';
 
 interface AppContextValue {
   isLoggedIn: boolean;
@@ -69,6 +70,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [db, handleUpdateDb, addNotification]);
 
   const handleLoginSuccess = useCallback((userId: string, tenantId?: string | null) => {
+    resetModuleCache();
     setActiveUserId(userId);
     setActiveTenantId(tenantId || db.tenants[0]?.id || '');
     setIsLoggedIn(true);

@@ -33,6 +33,15 @@ export function requireActiveTenant(req: AuthenticatedRequest, res: Response, ne
   next();
 }
 
+export function getEffectivePlanId(tenant: { subscriptionPlanId?: string | null; plan?: string | null }): string | null {
+  if (tenant?.subscriptionPlanId) return tenant.subscriptionPlanId;
+  if (tenant?.plan) {
+    const byName = db.prepare('SELECT id FROM pricing_plans WHERE name = ? AND active = 1').get(tenant.plan) as any;
+    if (byName) return byName.id;
+  }
+  return null;
+}
+
 export function requireModuleAccess(moduleKey: string) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ error: 'Non authentifié.' });
@@ -41,8 +50,11 @@ export function requireModuleAccess(moduleKey: string) {
     const tenantId = req.user.tenantId;
     if (!tenantId) return res.status(403).json({ error: 'Aucun abonnement associé.' });
 
-    const tenant = db.prepare('SELECT subscriptionPlanId FROM tenants WHERE id = ?').get(tenantId) as any;
-    if (!tenant || !tenant.subscriptionPlanId) return res.status(403).json({ error: 'Plan d\'abonnement introuvable.' });
+    const tenant = db.prepare('SELECT subscriptionPlanId, plan FROM tenants WHERE id = ?').get(tenantId) as any;
+    if (!tenant) return res.status(403).json({ error: 'Abonnement introuvable.' });
+
+    const planId = getEffectivePlanId(tenant);
+    if (!planId) return res.status(403).json({ error: 'Plan d\'abonnement introuvable.' });
 
     // Check core module
     const moduleDef = db.prepare('SELECT is_core FROM module_definitions WHERE key = ?').get(moduleKey) as any;
@@ -56,7 +68,7 @@ export function requireModuleAccess(moduleKey: string) {
     }
 
     // Check plan module
-    const planModule = db.prepare('SELECT enabled FROM plan_modules WHERE planId = ? AND moduleKey = ?').get(tenant.subscriptionPlanId, moduleKey) as any;
+    const planModule = db.prepare('SELECT enabled FROM plan_modules WHERE planId = ? AND moduleKey = ?').get(planId, moduleKey) as any;
     if (!planModule) return res.status(HTTP_STATUS.FORBIDDEN).json({ error: `Module "${moduleKey}" non inclus dans votre formule.` });
     if (!planModule.enabled) return res.status(HTTP_STATUS.FORBIDDEN).json({ error: `Module "${moduleKey}" désactivé par l\'administrateur.` });
 
@@ -75,10 +87,11 @@ export function requireActiveUser(req: AuthenticatedRequest, res: Response, next
 }
 
 export function getTenantAvailableModules(tenantId: string): string[] {
-  const tenant = db.prepare('SELECT subscriptionPlanId FROM tenants WHERE id = ?').get(tenantId) as any;
-  if (!tenant || !tenant.subscriptionPlanId) return ['dashboard', 'sales'];
+  const tenant = db.prepare('SELECT subscriptionPlanId, plan FROM tenants WHERE id = ?').get(tenantId) as any;
+  const planId = getEffectivePlanId(tenant);
+  if (!planId) return ['dashboard', 'sales'];
 
-  const planModules = db.prepare('SELECT moduleKey FROM plan_modules WHERE planId = ? AND enabled = 1').all(tenant.subscriptionPlanId) as any[];
+  const planModules = db.prepare('SELECT moduleKey FROM plan_modules WHERE planId = ? AND enabled = 1').all(planId) as any[];
   const planModuleKeys = new Set(planModules.map(p => p.moduleKey));
 
   const tenantOverrides = db.prepare('SELECT moduleKey, enabled FROM tenant_modules WHERE tenantId = ?').all(tenantId) as any[];

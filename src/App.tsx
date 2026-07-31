@@ -12,7 +12,7 @@ import type { TabType, DBState, Sale, Product, Customer, Tenant, User, Subscript
 import { DBProvider, useDB, AppProvider, useApp } from './context';
 import { LOCAL_CACHE_KEY, DEFAULT_PRICING_PLANS, AUTH_TOKEN_KEY } from './constants';
 import { formatCurrency } from './utils';
-import { useAvailableModules } from './hooks/useModules';
+import { useAvailableModules, resetModuleCache } from './hooks/useModules';
 
 const LazyDashboard = lazy(() => import('./components/Dashboard'));
 const LazyProducts = lazy(() => import('./components/Products'));
@@ -339,7 +339,7 @@ function AppShell() {
             <span>Statut Sync :</span>
             {isSyncing ? <span className="text-blue-400 animate-pulse">Fusion...</span> : <span className="text-emerald-400">Sauvegardé</span>}
           </div>
-          <button onClick={() => { setIsLoggedIn(false); setActiveUserId(''); setActiveTenantId(''); localStorage.removeItem('nexastock_session'); }}
+          <button onClick={() => { resetModuleCache(); setIsLoggedIn(false); setActiveUserId(''); setActiveTenantId(''); localStorage.removeItem('nexastock_session'); }}
             className="w-full text-center py-1 bg-gray-950 hover:bg-gray-850 border border-gray-850 text-gray-400 hover:text-white text-[10px] rounded transition uppercase font-bold">
             Se déconnecter
           </button>
