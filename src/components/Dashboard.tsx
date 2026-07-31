@@ -36,7 +36,7 @@ function useDashboardData() {
   const totalExpenses = useMemo(() =>
     tenantExpenses.filter(e => e.status === 'paye').reduce((acc, e) => acc + e.amount, 0), [tenantExpenses]);
 
-  const totalProfit = useMemo(() => totalRevenue - totalCostOfGoodsSold - totalExpenses, [totalRevenue, totalCostOfGoodsSold, totalExpenses]);
+  const totalProfit = useMemo(() => totalRevenue - totalCostOfGoodsSold, [totalRevenue, totalCostOfGoodsSold]);
 
   const totalStockValue = useMemo(() => tenantProducts.reduce((acc, p) => acc + (p.quantity * p.buyPrice), 0), [tenantProducts]);
   const totalStockPotentialValue = useMemo(() => tenantProducts.reduce((acc, p) => acc + (p.quantity * p.sellPrice), 0), [tenantProducts]);
@@ -233,7 +233,7 @@ function DashboardInner() {
           <div className="mt-4">
             <p className="text-xs font-medium text-gray-400">Bénéfice Net Estimé</p>
             <h3 className="text-2xl font-bold font-mono text-white mt-1">{formatted(totalProfit)}</h3>
-            <p className="text-[10px] text-gray-500 mt-1">Revenu moins dépenses & coûts d'achat</p>
+            <p className="text-[10px] text-gray-500 mt-1">Revenu moins coûts d'achat (les dépenses sont comptabilisées ci-dessous)</p>
           </div>
         </motion.div>
 
