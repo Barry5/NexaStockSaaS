@@ -3,6 +3,7 @@ import db from '../database/db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth.js';
 import { requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../services/auth.js';
+import { getAdminClient } from '../services/supabase/supabaseService.js';
 import { syncService } from '../sync/syncService.js';
 import { syncEngine } from '../sync/syncEngine.js';
 import { supabaseWorker } from '../sync/supabaseWorker.js';
@@ -300,6 +301,92 @@ router.get('/failed', authenticateToken, requireRole(['superadmin']), (req, res)
     LIMIT 200
   `).all() as any[];
   res.json({ count: items.length, items });
+});
+
+// Tables métier à vider (ordre enfants -> parents pour respecter les FK).
+// Sont CONSERVÉS : superadmin, roles/permissions/role_permissions/user_roles,
+// pricing_plans, global_saas_settings, module_definitions, plan_modules.
+const WIPE_TABLES = [
+  'sale_affiliates', 'sale_commission_items', 'sale_items', 'return_items',
+  'delivery_order_items', 'invoice_items', 'invoice_audit_log',
+  'commission_ledger', 'commission_payments', 'commission_audit',
+  'repayments', 'loan_installments', 'product_variants', 'delivery_note_audit',
+  'audit_logs', 'returns', 'delivery_orders', 'invoices', 'payments',
+  'sales', 'expenses', 'loans', 'customers', 'suppliers', 'products',
+  'warehouses', 'stock_transfers', 'affiliates', 'commission_rules',
+  'subscription_payments', 'subscription_invoices', 'tenant_modules',
+  'gdrive_tokens', 'users', 'tenants',
+];
+
+const WIPE_SYNC_TABLES = ['sync_queue', 'sync_changelog', 'sync_deletions', 'sync_tracking', 'sync_uuid_map'];
+
+function wipeSupabaseData(): Promise<{ tables: number; errors: string[] }> {
+  const admin = getAdminClient();
+  const errors: string[] = [];
+  let tables = 0;
+
+  return WIPE_TABLES.reduce<Promise<number>>(async (acc, table) => {
+    const count = await acc;
+    try {
+      // gdrive_tokens n'a pas de legacy_id
+      const column = table === 'gdrive_tokens' ? 'tenant_id' : 'legacy_id';
+      const { error } = await admin.from(table).delete().neq(column, '__never__');
+      if (error) errors.push(`${table}: ${error.message}`);
+      else tables = count + 1;
+    } catch (e: any) {
+      errors.push(`${table}: ${e.message}`);
+    }
+    return tables;
+  }, Promise.resolve(0)).then(() => ({ tables, errors }));
+}
+
+// Vide les tables métier SQLite + la file de sync, conserve le seed système.
+export function wipeLocalData(): { tablesCleared: number } {
+  let tablesCleared = 0;
+  db.transaction(() => {
+    for (const table of WIPE_TABLES) {
+      if (table === 'users') {
+        db.prepare(`DELETE FROM users WHERE id != 'u-1'`).run();
+      } else {
+        db.prepare(`DELETE FROM ${table}`).run();
+      }
+      tablesCleared++;
+    }
+    for (const table of WIPE_SYNC_TABLES) {
+      try { db.prepare(`DELETE FROM ${table}`).run(); } catch { /* table absente */ }
+    }
+  })();
+  return { tablesCleared };
+}
+
+// POST /api/sync/wipe-all: Supprime TOUTES les données métier (SQLite + Supabase).
+// Ne conserve que : superadmin, rôles/permissions, forfaits, paramètres, modules.
+router.post('/wipe-all', authenticateToken, requireRole(['superadmin']), async (req, res, next) => {
+  try {
+    const confirm = req.body?.confirm as string;
+    if (confirm !== 'WIPE-ALL') {
+      return res.status(400).json({ error: 'Confirmation requise: { confirm: "WIPE-ALL" }' });
+    }
+
+    // 1. Vider Supabase (données métier uniquement)
+    const remote = await wipeSupabaseData();
+
+    // 2. Vider SQLite (données métier + file de sync), garder le seed système
+    const local = wipeLocalData();
+
+    // 3. Repousser le seed système (superadmin, forfaits, paramètres, modules, RBAC)
+    const push = await syncService.fullPush();
+
+    res.json({
+      success: true,
+      message: 'Toutes les données métier ont été supprimées (Supabase + SQLite). Conserve: superadmin, rôles, forfaits, paramètres, modules.',
+      remote: { tablesCleared: remote.tables, errors: remote.errors.length ? remote.errors : undefined },
+      local: { tablesCleared: local.tablesCleared },
+      seedPush: { pushed: push.pushed, failed: push.failed, errors: push.errors.length ? push.errors : undefined },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // POST /api/sync/trigger: Manually trigger a sync cycle (push + pull)
