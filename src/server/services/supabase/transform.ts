@@ -11,6 +11,23 @@ export const NO_LEGACY_ID_TABLES = new Set([
   'tenant_modules',       // clé: id (UUID)
 ]);
 
+// Colonnes SQLite à ne JAMAIS pousser vers PostgreSQL :
+// - 'version' a été ajoutée à toutes les tables SQLite par la migration 010
+//   mais n'existe sur aucune table PG (PostgREST rejette le batch entier).
+const ALWAYS_EXCLUDED_COLUMNS = new Set(['version']);
+
+// Colonnes SQLite absentes du schéma PG pour certaines tables
+// (créées sans horodatage côté PostgreSQL). Si la colonne existe en PG,
+// l'exclusion la laisse simplement NULL : sans danger.
+const TABLE_EXCLUDED_COLUMNS: Record<string, Set<string>> = {
+  permissions: new Set(['updated_at', 'created_at']),
+  module_definitions: new Set(['updated_at', 'created_at']),
+  tenant_modules: new Set(['updated_at', 'created_at']),
+  roles: new Set(['updated_at', 'created_at']),
+  role_permissions: new Set(['updated_at', 'created_at']),
+  user_roles: new Set(['updated_at', 'created_at']),
+};
+
 export function getConflictColumn(tableName: string): string {
   switch (tableName) {
     case 'global_saas_settings': return 'id';
@@ -85,7 +102,14 @@ export function snakeToCamel(key: string): string {
 
 export function transformToPostgres(tableName: string, record: Record<string, unknown>): Record<string, unknown> {
   const pg: Record<string, unknown> = {};
-  const skipKeys = new Set(['_table']);
+  const skipKeys = new Set(['_table', ...ALWAYS_EXCLUDED_COLUMNS]);
+  const tableExclusions = TABLE_EXCLUDED_COLUMNS[tableName];
+  if (tableExclusions) {
+    for (const k of tableExclusions) {
+      skipKeys.add(k);
+      skipKeys.add(k === 'updated_at' ? 'updatedAt' : k === 'created_at' ? 'createdAt' : k);
+    }
+  }
   if (!NO_LEGACY_ID_TABLES.has(tableName)) skipKeys.add('id');
 
   for (const [key, value] of Object.entries(record)) {

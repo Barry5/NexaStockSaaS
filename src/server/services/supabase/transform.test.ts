@@ -1,0 +1,67 @@
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+let transform: any;
+let tempDir: string;
+
+describe('transformToPostgres : exclusion des colonnes absentes du schéma PG', () => {
+  beforeAll(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexastock-transform-'));
+    process.env.DB_PATH = path.join(tempDir, 'database.db');
+    process.env.BACKUP_DIR = path.join(tempDir, 'backups');
+    process.env.SNAPSHOT_PATH = path.join(tempDir, 'snapshot.json');
+
+    const dbModule = await import('../../database/db.js');
+    const db = dbModule.default;
+    const init = await import('../../database/init.js');
+    init.initializeDatabase();
+
+    ({ transformToPostgres: transform } = await import('./transform.js'));
+  });
+
+  afterAll(() => {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch { /* ignore */ }
+  });
+
+  it('n\'envoie jamais la colonne version (ajoutée par la migration 010, absente en PG)', () => {
+    const pg = transform('pricing_plans', {
+      id: 'plan-free', name: 'Free', price: 0, version: 1, updatedAt: '2026-07-31T00:00:00Z',
+    });
+    expect(pg.version).toBeUndefined();
+    expect(pg.updated_at).toBeDefined();
+  });
+
+  it('exclut updated_at et created_at pour permissions (schéma PG sans horodatage)', () => {
+    const pg = transform('permissions', {
+      id: 'perm-products-view', key: 'products.view', name: 'Voir produits',
+      version: 1, updatedAt: '2026-07-31T00:00:00Z', createdAt: '2026-07-31T00:00:00Z',
+    });
+    expect(pg.version).toBeUndefined();
+    expect(pg.updated_at).toBeUndefined();
+    expect(pg.created_at).toBeUndefined();
+    expect(pg.key).toBe('products.view');
+  });
+
+  it('exclut updated_at et created_at pour module_definitions', () => {
+    const pg = transform('module_definitions', {
+      key: 'dashboard', label: 'Tableau de bord',
+      version: 1, updatedAt: '2026-07-31T00:00:00Z', createdAt: '2026-07-31T00:00:00Z',
+    });
+    expect(pg.updated_at).toBeUndefined();
+    expect(pg.created_at).toBeUndefined();
+    expect(pg.label).toBe('Tableau de bord');
+  });
+
+  it('garde updated_at pour les tables dont le schéma PG l\'a (ex: tenants)', () => {
+    const pg = transform('tenants', {
+      id: 't-1', name: 'Test', plan: 'Free', version: 1, updatedAt: '2026-07-31T00:00:00Z',
+    });
+    expect(pg.updated_at).toBe('2026-07-31T00:00:00Z');
+    expect(pg.version).toBeUndefined();
+    expect(pg.legacy_id).toBe('t-1');
+  });
+});
