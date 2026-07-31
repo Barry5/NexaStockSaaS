@@ -49,8 +49,16 @@ export function getOrCreateUuid(sqliteId: string): string {
 }
 
 export function getSqliteIdFromUuid(pgUuid: string): string | null {
+  ensureUuidMapTable();
   const row = db.prepare(`SELECT sqlite_id FROM ${uuidMapTable} WHERE pg_uuid = ?`).get(pgUuid) as { sqlite_id: string } | undefined;
   return row?.sqlite_id || null;
+}
+
+export function recordUuidMapping(sqliteId: string, pgUuid: string): void {
+  if (!sqliteId || !pgUuid) return;
+  ensureUuidMapTable();
+  db.prepare(`INSERT OR IGNORE INTO ${uuidMapTable} (sqlite_id, pg_uuid, created_at) VALUES (?, ?, ?)`)
+    .run(sqliteId, pgUuid, new Date().toISOString());
 }
 
 function isFkColumn(pgKey: string): boolean {
@@ -59,6 +67,7 @@ function isFkColumn(pgKey: string): boolean {
 }
 
 function resolveFkValue(value: string): string {
+  ensureUuidMapTable();
   const mapped = db.prepare(`SELECT pg_uuid FROM ${uuidMapTable} WHERE sqlite_id = ?`).get(value) as { pg_uuid: string } | undefined;
   if (mapped) return mapped.pg_uuid;
   return getOrCreateUuid(value);

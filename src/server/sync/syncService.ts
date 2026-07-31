@@ -1,6 +1,6 @@
 ﻿import db from '../database/db.js';
 import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince } from '../services/supabase/supabaseService.js';
-import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria } from '../services/supabase/transform.js';
+import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria, recordUuidMapping } from '../services/supabase/transform.js';
 import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
 import { TABLE_MAPPINGS, TABLES_WITHOUT_UPDATED_AT } from './syncTables.js';
@@ -299,6 +299,13 @@ class SyncService {
   private upsertBatchToLocal(tableName: string, records: any[]) {
     if (records.length === 0) return;
 
+    // Enregistrer les mappings UUID <-> legacy_id pour permettre la résolution des FK
+    for (const r of records) {
+      if (r && r.id && r.legacy_id) {
+        recordUuidMapping(r.legacy_id as string, r.id as string);
+      }
+    }
+
     // Convertir les enregistrements Supabase (snake_case) en format SQLite (camelCase)
     const camelRecords = records.map(r => transformFromPostgres(r));
 
@@ -322,6 +329,7 @@ class SyncService {
         const values = insertCols.map(c => {
           const val = record[c];
           if (val === undefined) return null;
+          if (typeof val === 'boolean') return val ? 1 : 0;
           if (val !== null && typeof val === 'object' && !(val instanceof Date) && !Buffer.isBuffer(val)) {
             return JSON.stringify(val);
           }
