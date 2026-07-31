@@ -103,16 +103,18 @@ export class SyncEngine {
           const colNames = new Set(cols.map(c => c.name));
 
           if (operation === 'DELETE') {
+            // IMPORTANT: toujours enregistrer le DELETE dans sync_changelog + sync_deletions,
+            // même si l'enregistrement n'existe plus localement. Sinon le worker ne le
+            // propagera jamais vers Supabase -> ligne fantôme persistante côté PG.
             const existing = this.getRecord(table, recordId);
             const currentVersion = existing ? (existing.version as number) || 0 : 0;
+            const oldValues = (existing || data) as Record<string, unknown>;
 
-            if (existing) {
-              this.recordChange(table, recordId, 'DELETE', existing as Record<string, unknown>, null, currentVersion, currentVersion + 1, companyId, deviceId);
-              db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(recordId);
-              db.prepare(`INSERT OR REPLACE INTO sync_deletions (id, table_name, record_id, deleted_at, company_id) VALUES (?, ?, ?, ?, ?)`).run(
-                `del-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, table, recordId, new Date().toISOString(), companyId || null,
-              );
-            }
+            this.recordChange(table, recordId, 'DELETE', oldValues, null, currentVersion, currentVersion + 1, companyId, deviceId);
+            db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(recordId);
+            db.prepare(`INSERT OR REPLACE INTO sync_deletions (id, table_name, record_id, deleted_at, company_id) VALUES (?, ?, ?, ?, ?)`).run(
+              `del-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, table, recordId, new Date().toISOString(), companyId || null,
+            );
             result.applied++;
             continue;
           }
@@ -242,6 +244,26 @@ export class SyncEngine {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => '?').join(', ');
     db.prepare(`UPDATE sync_changelog SET pushed_to_supabase = 1 WHERE id IN (${placeholders})`).run(...ids);
+  }
+
+  // Nettoie les enregistrements de sync déjà poussés vers Supabase pour éviter
+  // la croissance infinie des tables sync_changelog / sync_deletions / sync_queue.
+  cleanupPushedRecords(beforeIso?: string): number {
+    const cutoff = beforeIso || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    let removed = 0;
+
+    const r1 = db.prepare(`DELETE FROM sync_changelog WHERE pushed_to_supabase = 1 AND created_at < ?`).run(cutoff);
+    removed += r1.changes;
+
+    const r2 = db.prepare(`DELETE FROM sync_deletions WHERE pushed_to_supabase = 1 AND deleted_at < ?`).run(cutoff);
+    removed += r2.changes;
+
+    const r3 = db.prepare(`DELETE FROM sync_queue WHERE status = 'completed' AND created_at < ?`).run(cutoff);
+    removed += r3.changes;
+
+    // Les items failed dépassant max_retries restent visibles via /api/sync/failed :
+    // on ne touche pas aux failed ici pour garder le diagnostic.
+    return removed;
   }
 
   private getRecord(table: string, id: string): Record<string, unknown> | undefined {

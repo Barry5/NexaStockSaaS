@@ -132,6 +132,18 @@ export class SupabaseWorker {
 
       this.cycleCount++;
       this.consecutiveErrors = 0;
+
+      // Nettoyer les enregistrements de sync déjà poussés (+7j) pour éviter la
+      // croissance infinie des tables sync_changelog / sync_deletions / sync_queue.
+      if (this.cycleCount % 10 === 0) {
+        try {
+          const removed = syncEngine.cleanupPushedRecords();
+          if (removed > 0) console.log('[SUPABASE_WORKER] Cleanup: ' + removed + ' sync records removed');
+        } catch (e: any) {
+          console.warn('[SUPABASE_WORKER] Cleanup failed:', e?.message || e);
+        }
+      }
+
       this.restartInterval();
     } catch (err: any) {
       this.consecutiveErrors++;

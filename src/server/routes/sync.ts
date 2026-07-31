@@ -407,10 +407,12 @@ router.post('/trigger', authenticateToken, requireRole(['superadmin']), async (r
     const upResult = await syncService.syncUp();
     const changelogResult = await syncService.syncUpFromChangelog();
     const downResult = await syncService.syncDown();
+    const cleanupResult = syncEngine.cleanupPushedRecords();
     res.json({
       syncQueue: upResult,
       changelog: changelogResult,
       pull: downResult,
+      cleanup: { removed: cleanupResult },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
