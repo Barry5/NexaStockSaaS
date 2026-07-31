@@ -9,6 +9,7 @@ let syncService: any;
 let syncQueue: any;
 let syncEngine: any;
 let transform: any;
+let tablesWithoutUpdatedAt: Set<string>;
 
 // Mock l'ensemble du service Supabase : on ne touche pas au réseau en test.
 const mockBatchUpsert = vitest.fn(async (_table: string, _records: any, _conflictColumn?: string) => ({ success: _records.length, errors: [] }));
@@ -24,6 +25,7 @@ vitest.mock('../services/supabase/supabaseService.js', () => ({
   batchUpsert: mockBatchUpsert,
   getAdminClient: mockGetAdminClient,
   getChangesSince: vitest.fn(),
+  getChangesSinceByCreatedAt: vitest.fn(async () => ({ data: [], error: null })),
 }));
 
 describe('syncService E2E : coherence local <-> Supabase', () => {
@@ -41,7 +43,10 @@ describe('syncService E2E : coherence local <-> Supabase', () => {
     ({ syncService } = await import('./syncService.js'));
     syncQueue = await import('./syncQueue.js');
     ({ syncEngine } = await import('./syncEngine.js'));
-    ({ transformToPostgres: transform } = await import('../services/supabase/transform.js'));
+  ({ transformToPostgres: transform } = await import('../services/supabase/transform.js'));
+
+    const syncTables = await import('./syncTables.js');
+    ({ TABLES_WITHOUT_UPDATED_AT: tablesWithoutUpdatedAt } = syncTables);
   });
 
   afterAll(() => {
@@ -109,5 +114,10 @@ describe('syncService E2E : coherence local <-> Supabase', () => {
 
     expect(removed).toBe(1);
     expect(db.prepare(`SELECT COUNT(*) as c FROM sync_changelog WHERE id = ?`).get('chg-test').c).toBe(0);
+  });
+
+  it('plan_modules est dans TABLES_WITHOUT_UPDATED_AT (PG n\'a pas updated_at -> fallback created_at)', () => {
+    expect(tablesWithoutUpdatedAt.has('plan_modules')).toBe(true);
+    expect(tablesWithoutUpdatedAt.has('tenant_modules')).toBe(true);
   });
 });

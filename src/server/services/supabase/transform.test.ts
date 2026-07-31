@@ -4,6 +4,8 @@ import os from 'os';
 import path from 'path';
 
 let transform: any;
+let getConflictColumn: any;
+let getDeleteCriteria: any;
 let tempDir: string;
 
 describe('transformToPostgres : exclusion et ommission conformes au schéma PG', () => {
@@ -19,6 +21,7 @@ describe('transformToPostgres : exclusion et ommission conformes au schéma PG',
     init.initializeDatabase();
 
     ({ transformToPostgres: transform } = await import('./transform.js'));
+    ({ getConflictColumn, getDeleteCriteria } = await import('./transform.js'));
   });
 
   afterAll(() => {
@@ -82,5 +85,26 @@ describe('transformToPostgres : exclusion et ommission conformes au schéma PG',
     expect(pg.updated_at).toBe('2026-07-31T00:00:00Z');
     expect(pg.version).toBeUndefined();
     expect(pg.legacy_id).toBe('t-1');
+  });
+
+  it('plan_modules: pas de legacy_id en PG -> genère un UUID pk id et utilise "id" comme colonne de conflit', () => {
+    const pg = transform('plan_modules', {
+      id: 'pm-123', planId: 'plan-premium', moduleKey: 'commissions', enabled: 1,
+      version: 1, updatedAt: null, createdAt: null,
+    });
+    expect(pg.legacy_id).toBeUndefined();          // PG n'a pas de legacy_id
+    expect(pg.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(pg.plan_id).toBeDefined();               // FK résolu via uuid map ou conservé
+    expect(pg.module_key).toBe('commissions');
+    expect(pg.version).toBeUndefined();
+    expect(pg.updated_at).toBeUndefined();
+    expect(getConflictColumn('plan_modules')).toBe('id');
+  });
+
+  it('getDeleteCriteria pour plan_modules cible la colonne id (UUID mappé)', () => {
+    const crit = getDeleteCriteria('plan_modules', 'pm-999');
+    expect(crit.column).toBe('id');
+    expect(typeof crit.value).toBe('string');
+    expect(crit.value).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

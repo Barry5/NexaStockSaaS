@@ -9,6 +9,7 @@ export const NO_LEGACY_ID_TABLES = new Set([
   'gdrive_tokens',        // clé: tenant_id (UUID)
   'module_definitions',   // clé: key (TEXT)
   'tenant_modules',       // clé: id (UUID)
+  'plan_modules',         // clé: id (UUID) — PG n'a pas de legacy_id
 ]);
 
 // Colonnes SQLite à ne JAMAIS pousser vers PostgreSQL :
@@ -34,6 +35,7 @@ export function getConflictColumn(tableName: string): string {
     case 'module_definitions': return 'key';
     case 'gdrive_tokens': return 'tenant_id';
     case 'tenant_modules': return 'id';
+    case 'plan_modules': return 'id';
     default: return 'legacy_id';
   }
 }
@@ -44,6 +46,7 @@ export function getDeleteCriteria(tableName: string, recordId: string): { column
     case 'module_definitions': return { column: 'key', value: recordId };
     case 'gdrive_tokens': return { column: 'tenant_id', value: resolveFkValue(recordId) };
     case 'tenant_modules': return { column: 'id', value: getOrCreateUuid(recordId) };
+    case 'plan_modules': return { column: 'id', value: getOrCreateUuid(recordId) };
     default: return { column: 'legacy_id', value: recordId };
   }
 }
@@ -133,7 +136,7 @@ export function transformToPostgres(tableName: string, record: Record<string, un
   }
 
   if (NO_LEGACY_ID_TABLES.has(tableName)) {
-    if (tableName === 'tenant_modules' && record.id) {
+    if ((tableName === 'tenant_modules' || tableName === 'plan_modules') && record.id) {
       pg.id = getOrCreateUuid(record.id as string);
     }
     return pg;

@@ -27,5 +27,5 @@ export const SYNC_TABLE_SET: ReadonlySet<string> = new Set(SYNC_TABLES);
 export const TABLES_WITHOUT_UPDATED_AT: ReadonlySet<string> = new Set([
   'module_definitions', 'tenant_modules', 'audit_logs', 'invoice_audit_log',
   'commission_audit', 'permissions', 'role_permissions', 'user_roles',
-  'delivery_note_audit',
+  'delivery_note_audit', 'plan_modules',
 ]);
