@@ -1,5 +1,5 @@
 ﻿import db from '../database/db.js';
-import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince } from '../services/supabase/supabaseService.js';
+import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, getChangesSinceByCreatedAt } from '../services/supabase/supabaseService.js';
 import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria, recordUuidMapping } from '../services/supabase/transform.js';
 import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
@@ -135,16 +135,21 @@ class SyncService {
     const errors: string[] = [];
 
     for (const table of tables) {
-      if (TABLES_WITHOUT_UPDATED_AT.has(table.sqliteName)) continue;
       try {
         const lastSync = SyncQueue.getLastSyncTime(table.sqliteName);
         const since = lastSync || new Date(0).toISOString();
+        // Tables sans updated_at en PG (RBAC/audit) : on utilise created_at comme
+        // fallback. Cela capte les nouveaux enregistrements; les UPDATEs sont
+        // rares sur ces tables et seront alignés par un fullPull si besoin.
+        const fetcher = TABLES_WITHOUT_UPDATED_AT.has(table.sqliteName)
+          ? getChangesSinceByCreatedAt
+          : getChangesSince;
 
         let offset = 0;
         let hasMore = true;
 
         while (hasMore) {
-          const { data, error } = await getChangesSince(table.pgName, since, 100, offset);
+          const { data, error } = await fetcher(table.pgName, since, 100, offset);
           if (error) {
             errors.push(`${table.sqliteName}: ${error.message}`);
             break;

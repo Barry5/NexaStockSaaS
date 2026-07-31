@@ -130,7 +130,7 @@ export async function getChangesSince(
   table: string,
   since: string,
   limit: number = 100,
-  offset: number = 0
+  offset: number = 0,
 ): Promise<{ data: any[] | null; error: any }> {
   const client = getAdminClient();
   return client
@@ -138,5 +138,25 @@ export async function getChangesSince(
     .select('*')
     .gte('updated_at', since)
     .order('updated_at', { ascending: true })
+    .range(offset, offset + limit - 1);
+}
+
+// Variante pour les tables dont le schéma PG n'a pas de colonne updated_at
+// (module_definitions, tenant_modules, permissions, role_permissions, user_roles,
+//  audit_logs, invoice_audit_log, commission_audit, delivery_note_audit).
+// On utilise created_at comme horodatage de modification. Cela capture les
+// nouveaux enregistrements mais pas les UPDATEs (ces tables sont quasi-statiques).
+export async function getChangesSinceByCreatedAt(
+  table: string,
+  since: string,
+  limit: number = 100,
+  offset: number = 0,
+): Promise<{ data: any[] | null; error: any }> {
+  const client = getAdminClient();
+  return client
+    .from(table)
+    .select('*')
+    .gte('created_at', since)
+    .order('id', { ascending: true })
     .range(offset, offset + limit - 1);
 }
