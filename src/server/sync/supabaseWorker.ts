@@ -1,6 +1,7 @@
 ﻿import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
-import { isSupabaseConfigured, checkConnection, batchUpsert, batchDelete } from '../services/supabase/supabaseService.js';
+import { isSupabaseConfigured, checkConnection, batchUpsert } from '../services/supabase/supabaseService.js';
+import { transformToPostgres, getConflictColumn, getDeleteCriteria } from '../services/supabase/transform.js';
 import { SYNC_TABLE_SET } from './syncTables.js';
 
 interface WorkerStatus {
@@ -157,15 +158,16 @@ export class SupabaseWorker {
       try {
         SyncQueue.markProcessing(item.id);
         const payload = JSON.parse(item.payload);
+        const mapping = this.resolveTableName(item.table_name);
 
         if (item.operation === 'DELETE') {
           const admin = (await import('../services/supabase/supabaseService.js')).getAdminClient();
-          const mapping = this.resolveTableName(item.table_name);
-          const { error } = await admin.from(mapping).delete().eq('legacy_id', item.record_id);
+          const { column, value } = getDeleteCriteria(item.table_name, item.record_id);
+          const { error } = await admin.from(mapping).delete().eq(column, value);
           if (error) throw error;
         } else {
-          const mapping = this.resolveTableName(item.table_name);
-          const result = await batchUpsert(mapping, [payload], 'legacy_id');
+          const pgRecord = transformToPostgres(item.table_name, payload);
+          const result = await batchUpsert(mapping, [pgRecord], getConflictColumn(mapping));
           if (result.errors.length > 0) throw new Error(result.errors.join('; '));
         }
 
@@ -194,11 +196,13 @@ export class SupabaseWorker {
 
         if (change.operation === 'DELETE') {
           const admin = (await import('../services/supabase/supabaseService.js')).getAdminClient();
-          const { error } = await admin.from(mapping).delete().eq('legacy_id', change.recordId);
+          const { column, value } = getDeleteCriteria(change.table, change.recordId);
+          const { error } = await admin.from(mapping).delete().eq(column, value);
           if (error) throw error;
         } else {
           const record = JSON.parse(change.data);
-          const result = await batchUpsert(mapping, [record], 'legacy_id');
+          const pgRecord = transformToPostgres(change.table, record);
+          const result = await batchUpsert(mapping, [pgRecord], getConflictColumn(mapping));
           if (result.errors.length > 0) throw new Error(result.errors.join('; '));
         }
 

@@ -2,7 +2,7 @@ import type { DBState } from '../types';
 import {
   enqueueBatch as dexieEnqueueBatch, dequeuePendingChanges, markProcessing, markCompleted,
   markFailed, setMeta, getMeta, removeMeta,
-  getAllPending, getPendingCount as dexiePendingCount, clearCompleted, retryFailed,
+  getAllPending, getPendingCount as dexiePendingCount, clearCompleted, retryFailed as dexieRetryFailed,
 } from '../lib/syncQueue';
 
 function getAuthHeaders(): Record<string, string> {
@@ -159,12 +159,14 @@ export async function getPendingCount(): Promise<number> {
 }
 
 export async function flushPendingChanges(flushBatchSize: number = 50): Promise<PushResult | null> {
-  const changes = await dequeuePendingChanges(flushBatchSize);
-  if (changes.length === 0) return null;
   if (pushInProgress) return null;
   pushInProgress = true;
 
   try {
+    await dexieRetryFailed();
+    const changes = await dequeuePendingChanges(flushBatchSize);
+    if (changes.length === 0) return null;
+
     const batch = changes.map(c => ({
       table: c.table,
       recordId: c.recordId,
@@ -177,21 +179,29 @@ export async function flushPendingChanges(flushBatchSize: number = 50): Promise<
       await markProcessing(change.id!);
     }
 
-    const result = await pushChanges(batch);
-    const appliedIds = changes.slice(0, result.applied).map(c => c.id!);
-    const conflictIds = result.conflicts.map(c => c.recordId);
-    const errorIds = result.errors.map(e => e.recordId);
-
-    for (const id of appliedIds) {
-      await markCompleted(id);
+    let result: PushResult;
+    try {
+      result = await pushChanges(batch);
+    } catch (err: any) {
+      // Réseau/auth: remettre en pending pour un prochain retry
+      for (const change of changes) {
+        await markFailed(change.id!, err?.message || 'Push failed');
+      }
+      return null;
     }
 
+    const errorIds = new Set(result.errors.map(e => e.recordId));
+    const conflictIds = new Set(result.conflicts.map(c => c.recordId));
+
     for (const change of changes) {
-      if (conflictIds.includes(change.recordId)) {
-        await markCompleted(change.id!);
-      } else if (errorIds.includes(change.recordId)) {
+      if (errorIds.has(change.recordId)) {
         const err = result.errors.find(e => e.recordId === change.recordId);
         await markFailed(change.id!, err?.error || 'Unknown error');
+      } else if (conflictIds.has(change.recordId)) {
+        // Conflit résolu côté serveur (remote_wins): considéré comme appliqué
+        await markCompleted(change.id!);
+      } else {
+        await markCompleted(change.id!);
       }
     }
 

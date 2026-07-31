@@ -21,3 +21,11 @@ export interface TableMapping {
 export const TABLE_MAPPINGS: TableMapping[] = SYNC_TABLES.map(t => ({ sqliteName: t, pgName: t }));
 
 export const SYNC_TABLE_SET: ReadonlySet<string> = new Set(SYNC_TABLES);
+
+// Tables dont le schéma PostgreSQL n'a PAS de colonne updated_at (le pull incrémental
+// via getChangesSince ne peut pas les interroger) — elles sont poussées uniquement.
+export const TABLES_WITHOUT_UPDATED_AT: ReadonlySet<string> = new Set([
+  'module_definitions', 'tenant_modules', 'audit_logs', 'invoice_audit_log',
+  'commission_audit', 'permissions', 'role_permissions', 'user_roles',
+  'delivery_note_audit',
+]);

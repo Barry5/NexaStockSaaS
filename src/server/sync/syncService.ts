@@ -1,9 +1,9 @@
 ﻿import db from '../database/db.js';
-import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, batchDelete } from '../services/supabase/supabaseService.js';
+import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince } from '../services/supabase/supabaseService.js';
+import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria } from '../services/supabase/transform.js';
 import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
-import { TABLE_MAPPINGS } from './syncTables.js';
-import { v4 as uuidv4 } from 'uuid';
+import { TABLE_MAPPINGS, TABLES_WITHOUT_UPDATED_AT } from './syncTables.js';
 
 export type SyncDirection = 'up' | 'down' | 'both';
 export type SyncMode = 'automatic' | 'manual' | 'background';
@@ -52,6 +52,8 @@ class SyncService {
     if (!await this.checkConnectivity()) {
       return { pushed: 0, failed: 0, errors: ['Supabase non disponible'] };
     }
+
+    SyncQueue.retryFailed();
 
     const items = SyncQueue.dequeue(50);
     if (items.length === 0) return { pushed: 0, failed: 0, errors: [] };
@@ -133,6 +135,7 @@ class SyncService {
     const errors: string[] = [];
 
     for (const table of tables) {
+      if (TABLES_WITHOUT_UPDATED_AT.has(table.sqliteName)) continue;
       try {
         const lastSync = SyncQueue.getLastSyncTime(table.sqliteName);
         const since = lastSync || new Date(0).toISOString();
@@ -234,7 +237,7 @@ class SyncService {
     return { pulled: totalPulled, errors, tables: tablesProcessed };
   }
 
-  async fullPush(): Promise<{ pushed: number; failed: number; errors: string[]; tables: number }> {
+  async fullPush(missingOnly: boolean = false): Promise<{ pushed: number; failed: number; errors: string[]; tables: number }> {
     if (!await this.checkConnectivity()) {
       return { pushed: 0, failed: 0, errors: ['Supabase non disponible'], tables: 0 };
     }
@@ -246,14 +249,18 @@ class SyncService {
 
     for (const mapping of TABLE_MAPPINGS) {
       try {
+        if (missingOnly && SyncQueue.getLastSyncTime(mapping.sqliteName) !== null) {
+          continue;
+        }
+
         const tableInfo = db.prepare(`PRAGMA table_info(${mapping.sqliteName})`).all() as { name: string }[];
         const cols = tableInfo.map(c => c.name).join(', ');
         const records = db.prepare(`SELECT ${cols} FROM ${mapping.sqliteName}`).all() as Record<string, unknown>[];
 
         if (records.length === 0) continue;
 
-        const pgRecords = records.map(r => this.transformToPostgres(mapping.sqliteName, r));
-        const result = await batchUpsert(mapping.pgName, pgRecords, 'legacy_id');
+        const pgRecords = records.map(r => transformToPostgres(mapping.sqliteName, r));
+        const result = await batchUpsert(mapping.pgName, pgRecords, getConflictColumn(mapping.pgName));
         totalPushed += result.success;
         if (result.errors.length > 0) {
           errors.push(...result.errors.map(e => `${mapping.sqliteName}: ${e}`));
@@ -273,8 +280,8 @@ class SyncService {
     const mapping = TABLE_MAPPINGS.find(t => t.sqliteName === tableName);
     if (!mapping) throw new Error(`Table ${tableName} non configurÃ©e pour la synchro`);
 
-    const pgRecord = this.transformToPostgres(tableName, record);
-    const result = await batchUpsert(mapping.pgName, [pgRecord], 'legacy_id');
+    const pgRecord = transformToPostgres(tableName, record);
+    const result = await batchUpsert(mapping.pgName, [pgRecord], getConflictColumn(mapping.pgName));
     if (result.errors.length > 0) throw new Error(result.errors.join('; '));
   }
 
@@ -284,7 +291,8 @@ class SyncService {
 
     const { getAdminClient } = await import('../services/supabase/supabaseService.js');
     const client = getAdminClient();
-    const { error } = await client.from(mapping.pgName).delete().eq('legacy_id', recordId);
+    const { column, value } = getDeleteCriteria(tableName, recordId);
+    const { error } = await client.from(mapping.pgName).delete().eq(column, value);
     if (error) throw new Error(error.message);
   }
 
@@ -292,7 +300,7 @@ class SyncService {
     if (records.length === 0) return;
 
     // Convertir les enregistrements Supabase (snake_case) en format SQLite (camelCase)
-    const camelRecords = records.map(r => this.transformFromPostgres(r));
+    const camelRecords = records.map(r => transformFromPostgres(r));
 
     const columns = Object.keys(camelRecords[0]).filter(c => c !== 'id');
     const allColumns = ['id', ...columns];
@@ -324,97 +332,6 @@ class SyncService {
     });
 
     transaction();
-  }
-
-  private uuidMap = new Map<string, string>();
-  private uuidMapTable = 'sync_uuid_map';
-
-  private ensureUuidMapTable() {
-    db.exec(`CREATE TABLE IF NOT EXISTS ${this.uuidMapTable} (
-      sqlite_id TEXT PRIMARY KEY,
-      pg_uuid TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL
-    )`);
-  }
-
-  private getOrCreateUuid(sqliteId: string): string {
-    const existing = db.prepare(`SELECT pg_uuid FROM ${this.uuidMapTable} WHERE sqlite_id = ?`).get(sqliteId) as { pg_uuid: string } | undefined;
-    if (existing) return existing.pg_uuid;
-    const uuid = uuidv4();
-    db.prepare(`INSERT OR IGNORE INTO ${this.uuidMapTable} (sqlite_id, pg_uuid, created_at) VALUES (?, ?, ?)`).run(sqliteId, uuid, new Date().toISOString());
-    return uuid;
-  }
-
-  private getSqliteIdFromUuid(pgUuid: string): string | null {
-    const row = db.prepare(`SELECT sqlite_id FROM ${this.uuidMapTable} WHERE pg_uuid = ?`).get(pgUuid) as { sqlite_id: string } | undefined;
-    return row?.sqlite_id || null;
-  }
-
-  private isFkColumn(pgKey: string): boolean {
-    const fkSuffixes = ['_id', 'Id'];
-    return fkSuffixes.some(s => pgKey.endsWith(s)) && pgKey !== 'legacy_id';
-  }
-
-  private resolveFkValue(value: string): string {
-    const mapped = db.prepare(`SELECT pg_uuid FROM ${this.uuidMapTable} WHERE sqlite_id = ?`).get(value) as { pg_uuid: string } | undefined;
-    if (mapped) return mapped.pg_uuid;
-    return this.getOrCreateUuid(value);
-  }
-
-  private transformToPostgres(tableName: string, record: Record<string, unknown>): Record<string, unknown> {
-    this.ensureUuidMapTable();
-    const pg: Record<string, unknown> = {};
-    const skipKeys = new Set(['_table', 'id']);
-
-    for (const [key, value] of Object.entries(record)) {
-      if (skipKeys.has(key)) continue;
-      const pgKey = key === 'tenantId' ? 'tenant_id' : key === 'legacy_id' ? 'legacy_id' : this.camelToSnake(key);
-      if (value === null || value === undefined) {
-        pg[pgKey] = null;
-        continue;
-      }
-      if (typeof value === 'string' && (value.startsWith('[') || value.startsWith('{'))) {
-        try { pg[pgKey] = JSON.parse(value); } catch { pg[pgKey] = value; }
-      } else if (typeof value === 'string' && this.isFkColumn(pgKey)) {
-        pg[pgKey] = this.resolveFkValue(value);
-      } else {
-        pg[pgKey] = value;
-      }
-    }
-
-    pg.legacy_id = record.legacy_id || record.id as string;
-    pg.id = this.getOrCreateUuid(pg.legacy_id as string);
-
-    return pg;
-  }
-
-  private snakeToCamel(key: string): string {
-    return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-  }
-
-  private transformFromPostgres(record: Record<string, unknown>): Record<string, unknown> {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(record)) {
-      if (key === 'id') continue;
-      const camelKey = key === 'legacy_id' ? 'id' : this.snakeToCamel(key);
-      if (value === null || value === undefined) {
-        result[camelKey] = null;
-        continue;
-      }
-      if (key.endsWith('_id') && key !== 'legacy_id' && typeof value === 'string') {
-        const sqliteId = this.getSqliteIdFromUuid(value);
-        result[camelKey] = sqliteId || value;
-      } else if (typeof value === 'object' && !(value instanceof Date) && !Buffer.isBuffer(value)) {
-        result[camelKey] = JSON.stringify(value);
-      } else {
-        result[camelKey] = value;
-      }
-    }
-    return result;
-  }
-
-  private camelToSnake(key: string): string {
-    return key.replace(/([A-Z])/g, '_$1').toLowerCase();
   }
 
   startBackgroundSync(intervalMs: number = 300000) {

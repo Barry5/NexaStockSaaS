@@ -20,24 +20,38 @@ import { syncService } from './src/server/sync/syncService.js';
 import { supabaseWorker } from './src/server/sync/supabaseWorker.js';
 import { loadLastSyncTimestamps } from './src/server/sync/syncQueue.js';
 syncService.initialize().then(async () => {
-  if (syncService.isOnline()) {
-    const trackingCount = loadLastSyncTimestamps().length;
-    if (trackingCount === 0) {
-      const pushResult = await syncService.fullPush();
-      console.log(`[SERVER] Initial fullPush: ${pushResult.pushed} pushed, ${pushResult.failed} failed, ${pushResult.tables} tables`);
-    } else {
-      const changelogResult = await syncService.syncUpFromChangelog();
-      if (changelogResult.pushed > 0) {
-        console.log(`[SERVER] Changelog syncUp: ${changelogResult.pushed} pushed, ${changelogResult.failed} failed`);
+  try {
+    if (syncService.isOnline()) {
+      const trackingCount = loadLastSyncTimestamps().length;
+      if (trackingCount === 0) {
+        const pushResult = await syncService.fullPush();
+        console.log(`[SERVER] Initial fullPush: ${pushResult.pushed} pushed, ${pushResult.failed} failed, ${pushResult.tables} tables`);
+      } else {
+        // Pousse les tables jamais synchronisées (fullPush incrémental), puis la file + changelog
+        const pushResult = await syncService.fullPush(true);
+        if (pushResult.pushed > 0 || pushResult.errors.length > 0) {
+          console.log(`[SERVER] FullPush missing tables: ${pushResult.pushed} pushed, ${pushResult.failed} failed, ${pushResult.tables} tables`);
+        }
+        const changelogResult = await syncService.syncUpFromChangelog();
+        if (changelogResult.pushed > 0 || changelogResult.failed > 0) {
+          console.log(`[SERVER] Changelog syncUp: ${changelogResult.pushed} pushed, ${changelogResult.failed} failed`);
+        }
       }
-    }
 
-    const pullResult = await syncService.syncDown();
-    console.log(`[SERVER] Sync syncDown: ${pullResult.pulled} pulled, ${pullResult.errors.length} errors`);
+      const pullResult = await syncService.syncDown();
+      console.log(`[SERVER] Sync syncDown: ${pullResult.pulled} pulled, ${pullResult.errors.length} errors`);
+    }
+  } catch (err: any) {
+    console.error('[SERVER] Erreur lors du sync de démarrage:', err?.message || err);
   }
   syncService.startBackgroundSync(60000);
   supabaseWorker.start();
   console.log('[SERVER] Sync service + Supabase worker started');
+}).catch(err => {
+  console.error('[SERVER] Initialisation du service de sync échouée:', err?.message || err);
+  syncService.startBackgroundSync(60000);
+  supabaseWorker.start();
+  console.log('[SERVER] Sync service + Supabase worker started (mode dégradé)');
 });
 
 // Import Router Modules
