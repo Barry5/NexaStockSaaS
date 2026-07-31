@@ -103,6 +103,16 @@ export class SaleService extends BaseService {
         `Enregistrement de la vente ${data.invoiceNumber} d'un montant total de ${data.total} EUR`,
         tenantId
       );
+      this.enqueueSyncFor('audit_logs', auditId, 'CREATE', {
+        id: auditId,
+        timestamp: this.now(),
+        userId,
+        userName,
+        action: 'VENTE_CREE',
+        details: `Enregistrement de la vente ${data.invoiceNumber} d'un montant total de ${data.total} EUR`,
+        tenantId,
+        legacy_id: auditId,
+      }, tenantId);
 
       return { id: saleId, ...data };
     });
@@ -148,6 +158,16 @@ export class SaleService extends BaseService {
         `Annulation de la facture ${sale.invoiceNumber} d'un montant de ${sale.total} EUR`,
         tenantId
       );
+      this.enqueueSyncFor('audit_logs', auditId, 'CREATE', {
+        id: auditId,
+        timestamp: this.now(),
+        userId,
+        userName,
+        action: 'VENTE_ANNULEE',
+        details: `Annulation de la facture ${sale.invoiceNumber} d'un montant de ${sale.total} EUR`,
+        tenantId,
+        legacy_id: auditId,
+      }, tenantId);
     });
 
     this.enqueueSync('DELETE', id, { ...sale, legacy_id: id }, tenantId);

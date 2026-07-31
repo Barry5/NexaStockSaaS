@@ -35,7 +35,22 @@ export class TenantService extends BaseService {
       UPDATE global_saas_settings SET trialDays = ?, gracePeriodDays = ?, revertToPlanOnExpiry = ?, orangeMoneyNumber = ?, orangeMoneyName = ?, mobileMoneyNumber = ?, mobileMoneyName = ?, bankDetails = ?, paymentInstructions = ?, automaticActivation = ? WHERE id = 1
     `).run(trialDays, gracePeriodDays, revertToPlanOnExpiry, orangeMoneyNumber || null, orangeMoneyName || null, mobileMoneyNumber || null, mobileMoneyName || null, bankDetails || null, paymentInstructions || null, automaticActivation ? 1 : 0);
     const updated = db.prepare('SELECT * FROM global_saas_settings WHERE id = 1').get() as any;
-    return { ...updated, automaticActivation: !!updated.automaticActivation };
+    const mapped = { ...updated, automaticActivation: !!updated.automaticActivation };
+    this.enqueueSyncFor('global_saas_settings', '1', 'UPDATE', { ...mapped, id: 1 });
+    return mapped;
+  }
+
+  private logAudit(action: string, details: string, tenantId: string, userId = 'system', userName = 'system') {
+    const id = genId('aud');
+    const timestamp = now();
+    db.prepare('INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, timestamp, userId, userName, action, details, tenantId);
+    // Enregistrer la trace uniquement si le tenant existe réellement (la pseudo-entreprise
+    // 'superadmin' n'a pas de ligne PG correspondante et casserait la FK tenant_id).
+    const tenantExists = db.prepare('SELECT 1 FROM tenants WHERE id = ?').get(tenantId);
+    if (tenantExists) {
+      this.enqueueSyncFor('audit_logs', id, 'CREATE', { id, timestamp, userId, userName, action, details, tenantId, legacy_id: id });
+    }
   }
 
   getAllTenants(): any[] {
@@ -67,7 +82,7 @@ export class TenantService extends BaseService {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'TRIAL', ?, ?, ?, ?, ?, ?)
       `).run(tenantId, name, email, phone || null, address || null, city || null, country || null, currency || 'GNF', plan || 'Free', startDate, trialEnd || null, startDate, trialEnd, startDate, startDate);
       db.prepare(`INSERT INTO users (id, name, email, password, role, tenantId, active, createdAt) VALUES (?, ?, ?, ?, 'owner', ?, 1, ?)`).run(userId, name, email, hashed, tenantId, startDate);
-      db.prepare(`INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, 'TENANT_CREATED', ?, ?)`).run(genId('aud'), startDate, 'system', 'system', `Entreprise "${name}" créée avec le plan ${plan || 'Free'} (trial: ${trialDays}j)`, 'superadmin');
+      this.logAudit('TENANT_CREATED', `Entreprise "${name}" créée avec le plan ${plan || 'Free'} (trial: ${trialDays}j)`, 'superadmin', 'system', 'system');
     });
     this.enqueueSync('CREATE', tenantId, { id: tenantId, name, email, plan, legacy_id: tenantId }, tenantId);
     return { tenant: db.prepare('SELECT * FROM tenants WHERE id = ?').get(tenantId), adminEmail: email, adminPassword: password };
@@ -94,8 +109,7 @@ export class TenantService extends BaseService {
     if (!valid.includes(status)) throw new Error(`Statut invalide. Utilisez: ${valid.join(', ')}`);
     db.prepare('UPDATE tenants SET subscriptionStatus = ?, updatedAt = ? WHERE id = ?').run(status, now(), t.id);
     const action = status === 'SUSPENDED' ? 'TENANT_SUSPENDED' : status === 'BLOCKED' ? 'TENANT_BLOCKED' : 'TENANT_REACTIVATED';
-    db.prepare('INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(genId('aud'), now(), 'system', 'system', action, `Statut changé: ${t.subscriptionStatus} → ${status}`, t.id);
+    this.logAudit(action, `Statut changé: ${t.subscriptionStatus} → ${status}`, t.id);
     this.enqueueSync('UPDATE', id, { subscriptionStatus: status, legacy_id: id }, t.id);
     return db.prepare('SELECT * FROM tenants WHERE id = ?').get(t.id);
   }
@@ -106,8 +120,7 @@ export class TenantService extends BaseService {
     const planRow = db.prepare('SELECT * FROM pricing_plans WHERE name = ? AND active = 1').get(plan) as any;
     if (!planRow) throw new Error('Plan introuvable ou inactif');
     db.prepare('UPDATE tenants SET plan = ?, updatedAt = ? WHERE id = ?').run(plan, now(), t.id);
-    db.prepare('INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(genId('aud'), now(), 'system', 'system', 'PLAN_CHANGED', `Plan changé: ${t.plan} → ${plan}`, t.id);
+    this.logAudit('PLAN_CHANGED', `Plan changé: ${t.plan} → ${plan}`, t.id);
     this.enqueueSync('UPDATE', id, { plan, legacy_id: id }, t.id);
     return db.prepare('SELECT * FROM tenants WHERE id = ?').get(t.id);
   }
@@ -118,8 +131,7 @@ export class TenantService extends BaseService {
     const { subscriptionEndDate, subscriptionStartDate } = data;
     if (subscriptionEndDate) db.prepare('UPDATE tenants SET subscriptionEndDate = ?, updatedAt = ? WHERE id = ?').run(subscriptionEndDate, now(), t.id);
     if (subscriptionStartDate) db.prepare('UPDATE tenants SET subscriptionStartDate = ?, updatedAt = ? WHERE id = ?').run(subscriptionStartDate, now(), t.id);
-    db.prepare('INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(genId('aud'), now(), 'system', 'system', 'EXPIRY_MODIFIED', subscriptionEndDate ? `Date d'expiration modifiée en ${subscriptionEndDate.split('T')[0]}` : 'Date de début modifiée', t.id);
+    this.logAudit('EXPIRY_MODIFIED', subscriptionEndDate ? `Date d'expiration modifiée en ${subscriptionEndDate.split('T')[0]}` : 'Date de début modifiée', t.id);
     this.enqueueSync('UPDATE', id, data, t.id);
     return db.prepare('SELECT * FROM tenants WHERE id = ?').get(t.id);
   }
@@ -133,8 +145,7 @@ export class TenantService extends BaseService {
     const trialEnd = t.trialEndDate ? new Date(new Date(t.trialEndDate).getTime() + days * 86400000).toISOString() : newEnd;
     db.prepare('UPDATE tenants SET trialEndDate = ?, subscriptionEndDate = ?, subscriptionStatus = CASE WHEN subscriptionStatus IN (\'EXPIRED\',\'SUSPENDED\') THEN \'TRIAL\' ELSE subscriptionStatus END, updatedAt = ? WHERE id = ?')
       .run(trialEnd, newEnd, now(), t.id);
-    db.prepare('INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(genId('aud'), now(), 'system', 'system', 'TRIAL_GRANTED', `${days} jours d'essai gratuits accordés`, t.id);
+    this.logAudit('TRIAL_GRANTED', `${days} jours d'essai gratuits accordés`, t.id);
     this.enqueueSync('UPDATE', id, { trialEndDate: trialEnd, subscriptionEndDate: newEnd, legacy_id: id }, t.id);
     return db.prepare('SELECT * FROM tenants WHERE id = ?').get(t.id);
   }
@@ -167,8 +178,7 @@ export class TenantService extends BaseService {
     if (userCount > 0) throw new Error(`Supprimez d'abord les ${userCount} utilisateur(s) de cette entreprise.`);
     this.runInTransaction(() => {
       db.prepare('DELETE FROM tenants WHERE id = ?').run(t.id);
-      db.prepare('INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(genId('aud'), now(), 'system', 'system', 'TENANT_DELETED', `Entreprise "${t.name}" supprimée`, t.id);
+      this.logAudit('TENANT_DELETED', `Entreprise "${t.name}" supprimée`, t.id);
     });
     this.enqueueSync('DELETE', id, t, id);
     return { success: true, message: `Entreprise "${t.name}" supprimée` };
@@ -213,8 +223,7 @@ export class TenantService extends BaseService {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(id, tenantId, activeTenant.name, planId, planName, amount, currency || 'EUR', paymentMethod, reference, transactionNumber, date, comment || null, receiptImage || null, 'PENDING', timestamp, timestamp);
       db.prepare('UPDATE tenants SET subscriptionStatus = \'PENDING\', subscriptionPlanId = ? WHERE id = ?').run(planId, tenantId);
-      db.prepare('INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(genId('aud'), timestamp, user.id, user.name, 'ABONNEMENT_DECLARE', `Déclaration de paiement pour le plan ${planName} (${amount} EUR) par ${paymentMethod}`, tenantId);
+      this.logAudit('ABONNEMENT_DECLARE', `Déclaration de paiement pour le plan ${planName} (${amount} EUR) par ${paymentMethod}`, tenantId, user.id, user.name);
     });
     this.enqueueSync('CREATE', id, { id, tenantId, planName, amount, legacy_id: id, _table: 'subscription_payments' }, tenantId);
     return db.prepare('SELECT * FROM subscription_payments WHERE id = ?').get(id);
@@ -232,8 +241,19 @@ export class TenantService extends BaseService {
         const endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
         db.prepare('UPDATE tenants SET plan = ?, subscriptionStatus = \'ACTIVE\', subscriptionStartDate = ?, subscriptionEndDate = ?, subscriptionPlanId = ? WHERE id = ?')
           .run(payment.planName, startDate, endDate, payment.planId, payment.tenantId);
+        const invId = `inv-${Date.now()}`;
         db.prepare('INSERT INTO subscription_invoices (id, invoiceNumber, date, amount, plan, status, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(`inv-${Date.now()}`, `INV-${Date.now()}`, startDate.split('T')[0], payment.amount, payment.planName, 'paye', payment.tenantId);
+          .run(invId, `INV-${Date.now()}`, startDate.split('T')[0], payment.amount, payment.planName, 'paye', payment.tenantId);
+        this.enqueueSyncFor('subscription_invoices', invId, 'CREATE', {
+          id: invId,
+          invoiceNumber: invId,
+          date: startDate,
+          amount: payment.amount,
+          plan: payment.planName,
+          status: 'paye',
+          tenantId: payment.tenantId,
+          legacy_id: invId,
+        }, payment.tenantId);
       } else if (status === 'REJECTED') {
         db.prepare('UPDATE tenants SET subscriptionStatus = \'EXPIRED\' WHERE id = ?').run(payment.tenantId);
       }

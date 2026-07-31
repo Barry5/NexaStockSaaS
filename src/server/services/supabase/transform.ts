@@ -70,7 +70,9 @@ function resolveFkValue(value: string): string {
   ensureUuidMapTable();
   const mapped = db.prepare(`SELECT pg_uuid FROM ${uuidMapTable} WHERE sqlite_id = ?`).get(value) as { pg_uuid: string } | undefined;
   if (mapped) return mapped.pg_uuid;
-  return getOrCreateUuid(value);
+  // Pas de mapping : conserver la valeur d'origine (ex: 'system', id jamais synchronisé)
+  // plutôt que de générer un UUID factice qui casserait les FK ou polluerait les colonnes TEXT.
+  return value;
 }
 
 export function camelToSnake(key: string): string {

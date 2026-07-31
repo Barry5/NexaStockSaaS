@@ -33,10 +33,22 @@ export class InvoiceService extends BaseService {
   }
 
   private addAuditLog(invoiceId: string, action: string, details: string, userId?: string, userName?: string) {
+    const id = genId('audit');
+    const timestamp = now();
     db.prepare(`
       INSERT INTO invoice_audit_log (id, invoiceId, action, details, userId, userName, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(genId('audit'), invoiceId, action, details, userId || null, userName || null, now());
+    `).run(id, invoiceId, action, details, userId || null, userName || null, timestamp);
+    this.enqueueSyncFor('invoice_audit_log', id, 'CREATE', {
+      id,
+      invoiceId,
+      action,
+      details,
+      userId: userId || null,
+      userName: userName || null,
+      timestamp,
+      legacy_id: id,
+    });
   }
 
   private recalcInvoiceDeliveryStatus(invoiceId: string) {
@@ -333,6 +345,20 @@ export class InvoiceService extends BaseService {
       this.addAuditLog(inv.id, 'PAYMENT_RECORDED', `Paiement de ${amount} reçu (${method})${reference ? ' ref: ' + reference : ''}`, userId, userName);
     });
 
+    this.enqueueSyncFor('payments', payId, 'CREATE', {
+      id: payId,
+      invoiceId: inv.id,
+      date: t,
+      amount,
+      method: method || 'cash',
+      reference: reference || null,
+      notes: notes || null,
+      tenantId: inv.tenantId,
+      createdBy: userId || null,
+      createdByName: userName || null,
+      createdAt: t,
+      legacy_id: payId,
+    }, inv.tenantId);
     this.enqueueSync('UPDATE', invoiceId, { paidAmount: (inv.paidAmount || 0) + amount, legacy_id: invoiceId }, inv.tenantId);
     return db.prepare('SELECT * FROM payments WHERE id = ?').get(payId) as any;
   }

@@ -55,7 +55,11 @@ export abstract class BaseService {
   }
 
   protected enqueueSync(operation: SyncOperation, recordId: string, payload: Record<string, unknown>, companyId?: string, deviceId?: string): void {
-    enqueue(this.tableName, recordId, operation, payload, companyId, deviceId);
+    this.enqueueSyncFor(this.tableName, recordId, operation, payload, companyId, deviceId);
+  }
+
+  protected enqueueSyncFor(tableName: string, recordId: string, operation: SyncOperation, payload: Record<string, unknown>, companyId?: string, deviceId?: string): void {
+    enqueue(tableName, recordId, operation, payload, companyId, deviceId);
     if (syncService.isOnline()) {
       syncService.syncUp().catch(() => {});
     }

@@ -29,7 +29,6 @@ export class ModuleService extends BaseService {
     for (let i = 0; i < moduleKeys.length; i++) {
       insert.run(`pm-${now}-${i}`, planId, moduleKeys[i]);
     }
-    this.enqueueSync('UPDATE', planId, { planId, moduleKeys, legacy_id: planId }, undefined);
     return this.getPlanModules(planId);
   }
 
@@ -41,10 +40,13 @@ export class ModuleService extends BaseService {
     const existing = db.prepare('SELECT id FROM tenant_modules WHERE tenantId = ? AND moduleKey = ?').get(tenantId, moduleKey) as any;
     if (existing) {
       db.prepare('UPDATE tenant_modules SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, existing.id);
+      this.enqueueSyncFor('tenant_modules', existing.id, 'UPDATE', { id: existing.id, tenantId, moduleKey, enabled }, tenantId);
     } else {
+      const id = `tm-${Date.now()}`;
       db.prepare('INSERT INTO tenant_modules (id, tenantId, moduleKey, enabled) VALUES (?, ?, ?, ?)').run(
-        `tm-${Date.now()}`, tenantId, moduleKey, enabled ? 1 : 0
+        id, tenantId, moduleKey, enabled ? 1 : 0
       );
+      this.enqueueSyncFor('tenant_modules', id, 'CREATE', { id, tenantId, moduleKey, enabled }, tenantId);
     }
     return this.getTenantModules(tenantId);
   }

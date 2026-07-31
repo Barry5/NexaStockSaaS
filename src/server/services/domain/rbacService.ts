@@ -44,6 +44,7 @@ export class RbacService extends BaseService {
   updateRolePermissions(roleId: string, permissions: Record<string, boolean>): any[] | null {
     const role = db.prepare('SELECT * FROM roles WHERE id = ?').get(roleId) as any;
     if (!role) return null;
+    const tenantId = role.tenantId;
     db.transaction(() => {
       for (const [key, allowed] of Object.entries(permissions)) {
         const perm = db.prepare('SELECT id FROM permissions WHERE key = ?').get(key) as any;
@@ -51,10 +52,13 @@ export class RbacService extends BaseService {
         const existing = db.prepare('SELECT id FROM role_permissions WHERE roleId = ? AND permissionId = ?').get(roleId, perm.id) as any;
         if (existing) {
           db.prepare('UPDATE role_permissions SET allowed = ? WHERE id = ?').run(allowed ? 1 : 0, existing.id);
+          this.enqueueSyncFor('role_permissions', existing.id, 'UPDATE', { id: existing.id, roleId, permissionId: perm.id, allowed: !!allowed, legacy_id: existing.id }, tenantId);
         } else if (allowed) {
+          const rpId = `rp-${roleId}-${perm.id}`;
           db.prepare('INSERT INTO role_permissions (id, roleId, permissionId, allowed) VALUES (?, ?, ?, 1)').run(
-            `rp-${roleId}-${perm.id}`, roleId, perm.id
+            rpId, roleId, perm.id
           );
+          this.enqueueSyncFor('role_permissions', rpId, 'CREATE', { id: rpId, roleId, permissionId: perm.id, allowed: true, legacy_id: rpId }, tenantId);
         }
       }
     })();
@@ -75,7 +79,11 @@ export class RbacService extends BaseService {
     );
     const viewPerms = db.prepare("SELECT id FROM permissions WHERE key LIKE '%.view'").all() as any[];
     const insertRp = db.prepare('INSERT OR IGNORE INTO role_permissions (id, roleId, permissionId, allowed) VALUES (?, ?, ?, 1)');
-    for (const vp of viewPerms) insertRp.run(`rp-${roleId}-${vp.id}`, roleId, vp.id);
+    for (const vp of viewPerms) {
+      const rpId = `rp-${roleId}-${vp.id}`;
+      insertRp.run(rpId, roleId, vp.id);
+      this.enqueueSyncFor('role_permissions', rpId, 'CREATE', { id: rpId, roleId, permissionId: vp.id, allowed: true, legacy_id: rpId }, tenantId);
+    }
     this.enqueueSync('CREATE', roleId, { id: roleId, name, label, description, tenantId, legacy_id: roleId }, tenantId);
     return db.prepare('SELECT * FROM roles WHERE id = ?').get(roleId);
   }
@@ -86,13 +94,19 @@ export class RbacService extends BaseService {
     db.prepare('UPDATE roles SET label = ?, description = ? WHERE id = ?').run(
       data.label || role.label, data.description || role.description, roleId
     );
-    return db.prepare('SELECT * FROM roles WHERE id = ?').get(roleId);
+    const updated = db.prepare('SELECT * FROM roles WHERE id = ?').get(roleId) as any;
+    this.enqueueSync('UPDATE', roleId, { ...updated, legacy_id: roleId }, role.tenantId);
+    return updated;
   }
 
   deleteRole(roleId: string): boolean {
     const role = db.prepare('SELECT * FROM roles WHERE id = ?').get(roleId) as any;
     if (!role) return false;
     db.transaction(() => {
+      const rps = db.prepare('SELECT * FROM role_permissions WHERE roleId = ?').all(roleId) as any[];
+      for (const rp of rps) this.enqueueSyncFor('role_permissions', rp.id, 'DELETE', { legacy_id: rp.id }, role.tenantId);
+      const urs = db.prepare('SELECT * FROM user_roles WHERE roleId = ?').all(roleId) as any[];
+      for (const ur of urs) this.enqueueSyncFor('user_roles', ur.id, 'DELETE', { legacy_id: ur.id }, role.tenantId);
       db.prepare('DELETE FROM role_permissions WHERE roleId = ?').run(roleId);
       db.prepare('DELETE FROM user_roles WHERE roleId = ?').run(roleId);
       db.prepare('DELETE FROM roles WHERE id = ?').run(roleId);
@@ -115,9 +129,19 @@ export class RbacService extends BaseService {
       if (!role) throw new Error(`Rôle introuvable : ${rid}`);
     }
     db.transaction(() => {
+      const previous = db.prepare('SELECT * FROM user_roles WHERE userId = ?').all(userId) as any[];
+      for (const ur of previous) {
+        if (!roleIds.includes(ur.roleId)) {
+          this.enqueueSyncFor('user_roles', ur.id, 'DELETE', { legacy_id: ur.id }, user.tenantId);
+        }
+      }
       db.prepare('DELETE FROM user_roles WHERE userId = ?').run(userId);
       const insert = db.prepare('INSERT INTO user_roles (id, userId, roleId) VALUES (?, ?, ?)');
-      for (const rid of roleIds) insert.run(`ur-${userId}-${rid}`, userId, rid);
+      for (const rid of roleIds) {
+        const urId = `ur-${userId}-${rid}`;
+        insert.run(urId, userId, rid);
+        this.enqueueSyncFor('user_roles', urId, 'CREATE', { id: urId, userId, roleId: rid, legacy_id: urId }, user.tenantId);
+      }
     })();
     return this.getUserRolesAndPerms(userId);
   }

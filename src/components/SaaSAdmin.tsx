@@ -382,7 +382,7 @@ export default function SaaSAdmin() {
       } else {
         nextPlans[idx] = {
           ...nextPlans[idx],
-          [field]: field === 'price' ? Number(value) : value
+          [field]: field === 'price' || field === 'durationDays' || field === 'displayOrder' ? Number(value) : value
         };
       }
       return nextPlans;
@@ -665,6 +665,7 @@ export default function SaaSAdmin() {
               localPricingPlans={localPricingPlans}
               pricingPlans={pricingPlans}
               localSaasCurrency={localSaasCurrency}
+              tenants={db.tenants}
               setLocalSaasCurrency={setLocalSaasCurrency}
               setLocalPricingPlans={setLocalPricingPlans}
               isSaaSSettingsSaved={isSaaSSettingsSaved}

@@ -3,8 +3,46 @@ import { authenticateToken, requireRole, AuthenticatedRequest } from '../middlew
 import { validate } from '../middleware/validate.js';
 import { tenantUpdateSchema } from '../schemas/index.js';
 import { tenantService } from '../services/domain/tenantService.js';
+import { pricingPlanService } from '../services/domain/pricingPlanService.js';
 
 const router = Router();
+
+// ===== Pricing Plans (superadmin only) =====
+router.get('/plans', authenticateToken, requireRole(['superadmin']), (req: AuthenticatedRequest, res: Response, next) => {
+  try {
+    const includeInactive = req.query.all !== '0';
+    res.json({ plans: pricingPlanService.getAll(includeInactive) });
+  } catch (error) { next(error); }
+});
+
+router.post('/plans', authenticateToken, requireRole(['superadmin']), (req: AuthenticatedRequest, res: Response, next) => {
+  try {
+    const plan = pricingPlanService.create(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.put('/plans/:id', authenticateToken, requireRole(['superadmin']), (req: AuthenticatedRequest, res: Response, next) => {
+  try {
+    const plan = pricingPlanService.update(req.params.id, req.body || {});
+    if (!plan) return res.status(404).json({ error: 'Forfait introuvable' });
+    res.json({ plan });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.delete('/plans/:id', authenticateToken, requireRole(['superadmin']), (req: AuthenticatedRequest, res: Response, next) => {
+  try {
+    const ok = pricingPlanService.remove(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Forfait introuvable' });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
 
 router.get('/settings', authenticateToken, (req: AuthenticatedRequest, res: Response, next) => {
   try {
