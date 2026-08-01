@@ -13,8 +13,12 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 export async function fetchServerState(): Promise<DBState> {
-  const res = await fetch('/api/sync');
-  if (!res.ok) throw new Error('Server sync failed');
+  const headers = getAuthHeaders();
+  const res = await fetch('/api/sync', { headers });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || `Server sync failed: ${res.status}`);
+  }
   return res.json() as Promise<DBState>;
 }
 

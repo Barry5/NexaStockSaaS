@@ -97,10 +97,16 @@ export function DBProvider({ children }: { children: ReactNode }) {
       setDb(data);
       persistCache(data);
       setSyncError(false);
-    } catch {
+    } catch (err: any) {
       setSyncError(true);
+      if (err?.message?.includes('401') || err?.message?.includes('Token')) {
+        addNotification('Session expirée. Veuillez vous reconnecter.', 'error');
+      } else {
+        console.error('fetchServerState failed:', err?.message || err);
+        addNotification('Erreur de synchronisation. Réessayez plus tard.', 'error');
+      }
     }
-  }, [persistCache]);
+  }, [persistCache, addNotification]);
 
   const flushNow = useCallback(async () => {
     if (flushTimerRef.current) {
