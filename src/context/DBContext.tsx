@@ -214,8 +214,8 @@ export function DBProvider({ children }: { children: ReactNode }) {
             });
           }
         }
-      } catch {
-        // silent
+      } catch (error: any) {
+        console.error('Background sync cycle failed:', error?.message || error);
       }
     }, 30000);
     return () => clearInterval(interval);

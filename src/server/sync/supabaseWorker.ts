@@ -233,7 +233,10 @@ export class SupabaseWorker {
   }
 
   private resolveTableName(sqliteName: string): string {
-    return SYNC_TABLE_SET.has(sqliteName) ? sqliteName : sqliteName;
+    if (!SYNC_TABLE_SET.has(sqliteName)) {
+      throw new Error(`Table sqlite "${sqliteName}" non autorisée pour la synchronisation`);
+    }
+    return sqliteName;
   }
 }
 

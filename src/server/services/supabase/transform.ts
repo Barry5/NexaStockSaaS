@@ -52,6 +52,9 @@ export function getDeleteCriteria(tableName: string, recordId: string): { column
 }
 
 function ensureUuidMapTable() {
+  // La table sync_uuid_map est créée par la migration 012_sync_uuid_map.
+  // Ce appel de secours garantit la compatibilité avec les bases de données
+  // non encore migrées (ex: instances existantes démarrées avant la migration).
   db.exec(`CREATE TABLE IF NOT EXISTS ${uuidMapTable} (
     sqlite_id TEXT PRIMARY KEY,
     pg_uuid TEXT NOT NULL UNIQUE,
@@ -87,12 +90,11 @@ function isFkColumn(pgKey: string): boolean {
 }
 
 function resolveFkValue(value: string): string {
+  if (!value) return value; // Ne pas traiter les FK nulles ou vides
   ensureUuidMapTable();
-  const mapped = db.prepare(`SELECT pg_uuid FROM ${uuidMapTable} WHERE sqlite_id = ?`).get(value) as { pg_uuid: string } | undefined;
-  if (mapped) return mapped.pg_uuid;
-  // Pas de mapping : conserver la valeur d'origine (ex: 'system', id jamais synchronisé)
-  // plutôt que de générer un UUID factice qui casserait les FK ou polluerait les colonnes TEXT.
-  return value;
+  // Pour toute valeur de clé étrangère, nous devons garantir un UUID.
+  // Soit il existe déjà dans la table de mapping, soit nous le créons.
+  return getOrCreateUuid(value);
 }
 
 export function camelToSnake(key: string): string {
@@ -117,7 +119,13 @@ export function transformToPostgres(tableName: string, record: Record<string, un
 
   for (const [key, value] of Object.entries(record)) {
     if (skipKeys.has(key)) continue;
-    const pgKey = key === 'tenantId' ? 'tenant_id' : key === 'legacy_id' ? 'legacy_id' : camelToSnake(key);
+    let pgKey = key === 'tenantId' ? 'tenant_id' : key === 'legacy_id' ? 'legacy_id' : camelToSnake(key);
+
+    // Correction pour la colonne 'returns' de la table 'sales' qui est nommée 'returns_json' en PG
+    if (tableName === 'sales' && key === 'returns') {
+      pgKey = 'returns_json';
+    }
+
     if (value === null || value === undefined) {
       // Les colonnes created_at/updated_at sont NOT NULL DEFAULT NOW() en PG :
       // les omettre (plutôt que d'envoyer NULL) laisse PostgreSQL appliquer son
@@ -148,18 +156,35 @@ export function transformToPostgres(tableName: string, record: Record<string, un
   return pg;
 }
 
-export function transformFromPostgres(record: Record<string, unknown>): Record<string, unknown> {
+export function transformFromPostgres(tableName: string, record: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
+
+  // Déterminer l'ID local : priorité au legacy_id, sinon fallback sur l'UUID de PG.
+  // C'est crucial pour les enregistrements créés directement sur Supabase.
+  const localId = record.legacy_id || record.id;
+  if (localId) {
+    result.id = localId;
+  }
+
   for (const [key, value] of Object.entries(record)) {
-    if (key === 'id') continue;
-    const camelKey = key === 'legacy_id' ? 'id' : snakeToCamel(key);
+    // La logique de l'ID a déjà été traitée
+    if (key === 'id' || key === 'legacy_id') continue;
+
+    let camelKey = snakeToCamel(key);
+    // Correction pour la colonne 'returns_json' de la table 'sales' qui est nommée 'returns' en local
+    if (tableName === 'sales' && key === 'returns_json') {
+      camelKey = 'returns';
+    }
+
     if (value === null || value === undefined) {
       result[camelKey] = null;
       continue;
     }
-    if (key.endsWith('_id') && key !== 'legacy_id' && typeof value === 'string') {
+    if (key.endsWith('_id') && typeof value === 'string') {
       const sqliteId = getSqliteIdFromUuid(value);
-      result[camelKey] = sqliteId || value;
+      // Si une FK ne peut être résolue, on met null pour éviter de violer
+      // la contrainte de clé étrangère locale avec un UUID brut.
+      result[camelKey] = sqliteId;
     } else if (typeof value === 'object' && !(value instanceof Date) && !Buffer.isBuffer(value)) {
       result[camelKey] = JSON.stringify(value);
     } else {
