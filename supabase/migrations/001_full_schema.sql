@@ -14,11 +14,20 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- Met à jour automatiquement updated_at
-CREATE OR REPLACE FUNCTION trigger_set_updated_at()
+CREATE OR REPLACE FUNCTION trigger_set_updated_at_with_version()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.updated_at = NOW();
   NEW.version = OLD.version + 1;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Met à jour automatiquement updated_at pour les tables SANS colonne version
+CREATE OR REPLACE FUNCTION trigger_set_updated_at_without_version()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -102,8 +111,10 @@ COMMENT ON TABLE public.tenants IS 'Entreprises/client abonnées à la plateform
 COMMENT ON COLUMN public.tenants.legacy_id IS 'Ancien ID TEXT de la base SQLite pour compatibilité';
 
 -- Trigger
+DROP TRIGGER IF EXISTS set_tenants_updated_at ON public.tenants;
 CREATE TRIGGER set_tenants_updated_at BEFORE UPDATE ON public.tenants
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_tenants_created_at ON public.tenants;
 CREATE TRIGGER set_tenants_created_at BEFORE INSERT ON public.tenants
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -131,12 +142,14 @@ CREATE TABLE IF NOT EXISTS public.users (
   version INTEGER NOT NULL DEFAULT 1,
   sync_status TEXT DEFAULT 'synced',
   device_id TEXT,
-  -- Contraintes
+  -- Contraintes,
   UNIQUE(email)
 );
 
+DROP TRIGGER IF EXISTS set_users_updated_at ON public.users;
 CREATE TRIGGER set_users_updated_at BEFORE UPDATE ON public.users
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_users_created_at ON public.users;
 CREATE TRIGGER set_users_created_at BEFORE INSERT ON public.users
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -170,8 +183,10 @@ CREATE TABLE IF NOT EXISTS public.products (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_products_updated_at ON public.products;
 CREATE TRIGGER set_products_updated_at BEFORE UPDATE ON public.products
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_products_created_at ON public.products;
 CREATE TRIGGER set_products_created_at BEFORE INSERT ON public.products
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -199,8 +214,10 @@ CREATE TABLE IF NOT EXISTS public.customers (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_customers_updated_at ON public.customers;
 CREATE TRIGGER set_customers_updated_at BEFORE UPDATE ON public.customers
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_customers_created_at ON public.customers;
 CREATE TRIGGER set_customers_created_at BEFORE INSERT ON public.customers
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -227,8 +244,10 @@ CREATE TABLE IF NOT EXISTS public.suppliers (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_suppliers_updated_at ON public.suppliers;
 CREATE TRIGGER set_suppliers_updated_at BEFORE UPDATE ON public.suppliers
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_suppliers_created_at ON public.suppliers;
 CREATE TRIGGER set_suppliers_created_at BEFORE INSERT ON public.suppliers
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -253,8 +272,10 @@ CREATE TABLE IF NOT EXISTS public.warehouses (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_warehouses_updated_at ON public.warehouses;
 CREATE TRIGGER set_warehouses_updated_at BEFORE UPDATE ON public.warehouses
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_warehouses_created_at ON public.warehouses;
 CREATE TRIGGER set_warehouses_created_at BEFORE INSERT ON public.warehouses
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -281,8 +302,10 @@ CREATE TABLE IF NOT EXISTS public.product_variants (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_product_variants_updated_at ON public.product_variants;
 CREATE TRIGGER set_product_variants_updated_at BEFORE UPDATE ON public.product_variants
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_product_variants_created_at ON public.product_variants;
 CREATE TRIGGER set_product_variants_created_at BEFORE INSERT ON public.product_variants
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -341,8 +364,10 @@ CREATE TABLE IF NOT EXISTS public.sales (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_sales_updated_at ON public.sales;
 CREATE TRIGGER set_sales_updated_at BEFORE UPDATE ON public.sales
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_sales_created_at ON public.sales;
 CREATE TRIGGER set_sales_created_at BEFORE INSERT ON public.sales
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -374,8 +399,10 @@ CREATE TABLE IF NOT EXISTS public.sale_items (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_sale_items_updated_at ON public.sale_items;
 CREATE TRIGGER set_sale_items_updated_at BEFORE UPDATE ON public.sale_items
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_sale_items_created_at ON public.sale_items;
 CREATE TRIGGER set_sale_items_created_at BEFORE INSERT ON public.sale_items
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -407,8 +434,10 @@ CREATE TABLE IF NOT EXISTS public.expenses (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_expenses_updated_at ON public.expenses;
 CREATE TRIGGER set_expenses_updated_at BEFORE UPDATE ON public.expenses
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_expenses_created_at ON public.expenses;
 CREATE TRIGGER set_expenses_created_at BEFORE INSERT ON public.expenses
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -438,8 +467,10 @@ CREATE TABLE IF NOT EXISTS public.loans (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_loans_updated_at ON public.loans;
 CREATE TRIGGER set_loans_updated_at BEFORE UPDATE ON public.loans
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_loans_created_at ON public.loans;
 CREATE TRIGGER set_loans_created_at BEFORE INSERT ON public.loans
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -465,8 +496,10 @@ CREATE TABLE IF NOT EXISTS public.repayments (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_repayments_updated_at ON public.repayments;
 CREATE TRIGGER set_repayments_updated_at BEFORE UPDATE ON public.repayments
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_repayments_created_at ON public.repayments;
 CREATE TRIGGER set_repayments_created_at BEFORE INSERT ON public.repayments
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -494,8 +527,10 @@ CREATE TABLE IF NOT EXISTS public.loan_installments (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_loan_installments_updated_at ON public.loan_installments;
 CREATE TRIGGER set_loan_installments_updated_at BEFORE UPDATE ON public.loan_installments
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_loan_installments_created_at ON public.loan_installments;
 CREATE TRIGGER set_loan_installments_created_at BEFORE INSERT ON public.loan_installments
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -525,8 +560,10 @@ CREATE TABLE IF NOT EXISTS public.stock_transfers (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_stock_transfers_updated_at ON public.stock_transfers;
 CREATE TRIGGER set_stock_transfers_updated_at BEFORE UPDATE ON public.stock_transfers
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_stock_transfers_created_at ON public.stock_transfers;
 CREATE TRIGGER set_stock_transfers_created_at BEFORE INSERT ON public.stock_transfers
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -577,8 +614,10 @@ CREATE TABLE IF NOT EXISTS public.invoices (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_invoices_updated_at ON public.invoices;
 CREATE TRIGGER set_invoices_updated_at BEFORE UPDATE ON public.invoices
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_invoices_created_at ON public.invoices;
 CREATE TRIGGER set_invoices_created_at BEFORE INSERT ON public.invoices
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -609,8 +648,10 @@ CREATE TABLE IF NOT EXISTS public.invoice_items (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_invoice_items_updated_at ON public.invoice_items;
 CREATE TRIGGER set_invoice_items_updated_at BEFORE UPDATE ON public.invoice_items
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_invoice_items_created_at ON public.invoice_items;
 CREATE TRIGGER set_invoice_items_created_at BEFORE INSERT ON public.invoice_items
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -638,24 +679,27 @@ CREATE TABLE IF NOT EXISTS public.delivery_orders (
   customer_signature TEXT,
   driver_signature TEXT,
   company_stamp TEXT,
-  updated_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_by TEXT,
   updated_by_name TEXT,
   tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
   -- Audit
   company_id UUID,
-  created_by_audit UUID,
-  updated_by_audit UUID,
   deleted_by UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ,
   sync_status TEXT DEFAULT 'synced',
-  device_id TEXT
+  device_id TEXT,
+  version INTEGER NOT NULL DEFAULT 1
 );
 
+DROP TRIGGER IF EXISTS set_delivery_orders_created_at ON public.delivery_orders;
 CREATE TRIGGER set_delivery_orders_created_at BEFORE INSERT ON public.delivery_orders
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
+DROP TRIGGER IF EXISTS set_delivery_orders_updated_at ON public.delivery_orders;
+CREATE TRIGGER set_delivery_orders_updated_at BEFORE UPDATE ON public.delivery_orders
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
 
 -- 3.4 Delivery Order Items
 CREATE TABLE IF NOT EXISTS public.delivery_order_items (
@@ -682,8 +726,10 @@ CREATE TABLE IF NOT EXISTS public.delivery_order_items (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_delivery_order_items_updated_at ON public.delivery_order_items;
 CREATE TRIGGER set_delivery_order_items_updated_at BEFORE UPDATE ON public.delivery_order_items
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_delivery_order_items_created_at ON public.delivery_order_items;
 CREATE TRIGGER set_delivery_order_items_created_at BEFORE INSERT ON public.delivery_order_items
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -703,8 +749,6 @@ CREATE TABLE IF NOT EXISTS public.payments (
   tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
   -- Audit
   company_id UUID,
-  created_by_audit UUID,
-  updated_by_audit UUID,
   deleted_by UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -714,8 +758,10 @@ CREATE TABLE IF NOT EXISTS public.payments (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_payments_updated_at ON public.payments;
 CREATE TRIGGER set_payments_updated_at BEFORE UPDATE ON public.payments
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_payments_created_at ON public.payments;
 CREATE TRIGGER set_payments_created_at BEFORE INSERT ON public.payments
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -735,8 +781,6 @@ CREATE TABLE IF NOT EXISTS public.returns (
   tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
   -- Audit
   company_id UUID,
-  created_by_audit UUID,
-  updated_by_audit UUID,
   deleted_by UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -746,8 +790,10 @@ CREATE TABLE IF NOT EXISTS public.returns (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_returns_updated_at ON public.returns;
 CREATE TRIGGER set_returns_updated_at BEFORE UPDATE ON public.returns
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_returns_created_at ON public.returns;
 CREATE TRIGGER set_returns_created_at BEFORE INSERT ON public.returns
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -777,8 +823,10 @@ CREATE TABLE IF NOT EXISTS public.return_items (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_return_items_updated_at ON public.return_items;
 CREATE TRIGGER set_return_items_updated_at BEFORE UPDATE ON public.return_items
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_return_items_created_at ON public.return_items;
 CREATE TRIGGER set_return_items_created_at BEFORE INSERT ON public.return_items
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -836,8 +884,10 @@ CREATE TABLE IF NOT EXISTS public.affiliates (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_affiliates_updated_at ON public.affiliates;
 CREATE TRIGGER set_affiliates_updated_at BEFORE UPDATE ON public.affiliates
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_affiliates_created_at ON public.affiliates;
 CREATE TRIGGER set_affiliates_created_at BEFORE INSERT ON public.affiliates
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -872,8 +922,10 @@ CREATE TABLE IF NOT EXISTS public.commission_rules (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_commission_rules_updated_at ON public.commission_rules;
 CREATE TRIGGER set_commission_rules_updated_at BEFORE UPDATE ON public.commission_rules
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_commission_rules_created_at ON public.commission_rules;
 CREATE TRIGGER set_commission_rules_created_at BEFORE INSERT ON public.commission_rules
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -916,8 +968,10 @@ CREATE TABLE IF NOT EXISTS public.commission_ledger (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_commission_ledger_updated_at ON public.commission_ledger;
 CREATE TRIGGER set_commission_ledger_updated_at BEFORE UPDATE ON public.commission_ledger
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_commission_ledger_created_at ON public.commission_ledger;
 CREATE TRIGGER set_commission_ledger_created_at BEFORE INSERT ON public.commission_ledger
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -953,8 +1007,10 @@ CREATE TABLE IF NOT EXISTS public.commission_payments (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_commission_payments_updated_at ON public.commission_payments;
 CREATE TRIGGER set_commission_payments_updated_at BEFORE UPDATE ON public.commission_payments
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_commission_payments_created_at ON public.commission_payments;
 CREATE TRIGGER set_commission_payments_created_at BEFORE INSERT ON public.commission_payments
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -1006,8 +1062,10 @@ CREATE TABLE IF NOT EXISTS public.sale_affiliates (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_sale_affiliates_updated_at ON public.sale_affiliates;
 CREATE TRIGGER set_sale_affiliates_updated_at BEFORE UPDATE ON public.sale_affiliates
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_sale_affiliates_created_at ON public.sale_affiliates;
 CREATE TRIGGER set_sale_affiliates_created_at BEFORE INSERT ON public.sale_affiliates
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -1038,8 +1096,10 @@ CREATE TABLE IF NOT EXISTS public.sale_commission_items (
   device_id TEXT
 );
 
+DROP TRIGGER IF EXISTS set_sale_commission_items_updated_at ON public.sale_commission_items;
 CREATE TRIGGER set_sale_commission_items_updated_at BEFORE UPDATE ON public.sale_commission_items
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_sale_commission_items_created_at ON public.sale_commission_items;
 CREATE TRIGGER set_sale_commission_items_created_at BEFORE INSERT ON public.sale_commission_items
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -1109,8 +1169,10 @@ CREATE TABLE IF NOT EXISTS public.roles (
   UNIQUE(name, tenant_id)
 );
 
+DROP TRIGGER IF EXISTS set_roles_updated_at ON public.roles;
 CREATE TRIGGER set_roles_updated_at BEFORE UPDATE ON public.roles
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_with_version();
+DROP TRIGGER IF EXISTS set_roles_created_at ON public.roles;
 CREATE TRIGGER set_roles_created_at BEFORE INSERT ON public.roles
   FOR EACH ROW EXECUTE FUNCTION trigger_set_created_at();
 
@@ -1181,10 +1243,10 @@ CREATE TABLE IF NOT EXISTS public.plan_modules (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   plan_id TEXT NOT NULL,
   module_key TEXT NOT NULL REFERENCES public.module_definitions(key),
-  enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  UNIQUE(plan_id, module_key),
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,  
   -- Audit
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(plan_id, module_key)
 );
 
 
@@ -1193,10 +1255,10 @@ CREATE TABLE IF NOT EXISTS public.tenant_modules (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
   module_key TEXT NOT NULL REFERENCES public.module_definitions(key),
-  enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  UNIQUE(tenant_id, module_key),
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,  
   -- Audit
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(tenant_id, module_key)
 );
 
 
@@ -1223,8 +1285,9 @@ CREATE TABLE IF NOT EXISTS public.pricing_plans (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+DROP TRIGGER IF EXISTS set_pricing_plans_updated_at ON public.pricing_plans;
 CREATE TRIGGER set_pricing_plans_updated_at BEFORE UPDATE ON public.pricing_plans
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_without_version();
 
 
 -- 8.2 Subscription Invoices
@@ -1243,8 +1306,9 @@ CREATE TABLE IF NOT EXISTS public.subscription_invoices (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+DROP TRIGGER IF EXISTS set_subscription_invoices_updated_at ON public.subscription_invoices;
 CREATE TRIGGER set_subscription_invoices_updated_at BEFORE UPDATE ON public.subscription_invoices
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_without_version();
 
 
 -- 8.3 Subscription Payments
@@ -1273,8 +1337,9 @@ CREATE TABLE IF NOT EXISTS public.subscription_payments (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+DROP TRIGGER IF EXISTS set_subscription_payments_updated_at ON public.subscription_payments;
 CREATE TRIGGER set_subscription_payments_updated_at BEFORE UPDATE ON public.subscription_payments
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_without_version();
 
 
 -- 8.4 Global SaaS Settings (single row)
@@ -1296,8 +1361,9 @@ CREATE TABLE IF NOT EXISTS public.global_saas_settings (
   CONSTRAINT single_row CHECK (id = 1)
 );
 
+DROP TRIGGER IF EXISTS set_global_saas_settings_updated_at ON public.global_saas_settings;
 CREATE TRIGGER set_global_saas_settings_updated_at BEFORE UPDATE ON public.global_saas_settings
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_without_version();
 
 
 -- 8.5 Google Drive Tokens
@@ -1309,6 +1375,10 @@ CREATE TABLE IF NOT EXISTS public.gdrive_tokens (
   -- Audit
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+DROP TRIGGER IF EXISTS set_gdrive_tokens_updated_at ON public.gdrive_tokens;
+CREATE TRIGGER set_gdrive_tokens_updated_at BEFORE UPDATE ON public.gdrive_tokens
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_without_version();
 
 
 -- ============================================================================
@@ -1346,8 +1416,9 @@ CREATE TABLE IF NOT EXISTS public.sync_tracking (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+DROP TRIGGER IF EXISTS set_sync_tracking_updated_at ON public.sync_tracking;
 CREATE TRIGGER set_sync_tracking_updated_at BEFORE UPDATE ON public.sync_tracking
-  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at_without_version();
 
 
 -- ============================================================================
@@ -1497,16 +1568,19 @@ BEGIN
 END $$;
 
 -- Policies spéciales pour tenants (auto-reference)
+DROP POLICY IF EXISTS tenant_isolation ON public.tenants;
 CREATE POLICY tenant_isolation ON public.tenants
   FOR ALL
   USING (id = current_company_id() OR current_setting('app.user_role', TRUE) = 'superadmin');
 
 -- Policies pour users (basé sur tenant_id)
+DROP POLICY IF EXISTS tenant_isolation ON public.users;
 CREATE POLICY tenant_isolation ON public.users
   FOR ALL
   USING (tenant_id = current_company_id() OR current_setting('app.user_role', TRUE) = 'superadmin');
 
 -- Policies pour roles (basé sur tenant_id, null = global)
+DROP POLICY IF EXISTS tenant_isolation ON public.roles;
 CREATE POLICY tenant_isolation ON public.roles
   FOR ALL
   USING (tenant_id = current_company_id() OR tenant_id IS NULL OR current_setting('app.user_role', TRUE) = 'superadmin');

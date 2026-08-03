@@ -29,9 +29,9 @@ class SyncService {
 
     if (isSupabaseConfigured()) {
       this.online = await checkConnection();
-      console.log(`[SYNC] Supabase ${this.online ? 'connectÃ©' : 'non joignable'}`);
+      console.log(`[SYNC] Supabase ${this.online ? 'connecté' : 'non joignable'}`);
     } else {
-      console.log('[SYNC] Supabase non configurÃ©. Mode SQLite uniquement.');
+      console.log('[SYNC] Supabase non configuré. Mode SQLite uniquement.');
     }
   }
 
@@ -148,10 +148,14 @@ class SyncService {
         let offset = 0;
         let hasMore = true;
 
+        let tablePulled = 0;
+        let tableError = false;
+
         while (hasMore) {
           const { data, error } = await fetcher(table.pgName, since, 100, offset);
           if (error) {
             errors.push(`${table.sqliteName}: ${error.message}`);
+            tableError = true;
             break;
           }
           if (!data || data.length === 0) {
@@ -159,19 +163,22 @@ class SyncService {
           } else {
             this.upsertBatchToLocal(table.sqliteName, data);
             pulled += data.length;
+            tablePulled += data.length;
             offset += data.length;
             if (data.length < 100) hasMore = false;
           }
         }
 
-        SyncQueue.updateLastSyncTime(table.sqliteName);
+        if (!tableError && tablePulled > 0) {
+          SyncQueue.updateLastSyncTime(table.sqliteName);
+        }
       } catch (err: any) {
         errors.push(`${table.sqliteName}: ${err.message}`);
       }
     }
 
     if (pulled > 0) {
-      console.log(`[SYNC DOWN] ${pulled} enregistrements rÃ©cupÃ©rÃ©s, ${errors.length} erreurs`);
+      console.log(`[SYNC DOWN] ${pulled} enregistrements récupérés, ${errors.length} erreurs`);
     }
 
     return { pulled, errors };
@@ -283,7 +290,7 @@ class SyncService {
 
   private async upsertToRemote(tableName: string, record: Record<string, unknown>): Promise<void> {
     const mapping = TABLE_MAPPINGS.find(t => t.sqliteName === tableName);
-    if (!mapping) throw new Error(`Table ${tableName} non configurÃ©e pour la synchro`);
+    if (!mapping) throw new Error(`Table ${tableName} non configurée pour la synchro`);
 
     const pgRecord = transformToPostgres(tableName, record);
     const result = await batchUpsert(mapping.pgName, [pgRecord], getConflictColumn(mapping.pgName));
@@ -292,7 +299,7 @@ class SyncService {
 
   private async deleteFromRemote(tableName: string, recordId: string): Promise<void> {
     const mapping = TABLE_MAPPINGS.find(t => t.sqliteName === tableName);
-    if (!mapping) throw new Error(`Table ${tableName} non configurÃ©e`);
+    if (!mapping) throw new Error(`Table ${tableName} non configurée`);
 
     const { getAdminClient } = await import('../services/supabase/supabaseService.js');
     const client = getAdminClient();
@@ -304,22 +311,24 @@ class SyncService {
   private upsertBatchToLocal(tableName: string, records: any[]) {
     if (records.length === 0) return;
 
-    // Enregistrer les mappings UUID <-> legacy_id pour permettre la résolution des FK
+    // Enregistrer les mappings UUID <-> ID local pour permettre la résolution des FK.
+    // Si legacy_id est absent, on utilise l'UUID de PG comme ID local.
     for (const r of records) {
-      if (r && r.id && r.legacy_id) {
-        recordUuidMapping(r.legacy_id as string, r.id as string);
+      if (r && r.id) { // r.id est l'UUID de PG
+        const localId = r.legacy_id || r.id;
+        recordUuidMapping(localId as string, r.id as string);
       }
     }
 
     // Convertir les enregistrements Supabase (snake_case) en format SQLite (camelCase)
-    const camelRecords = records.map(r => transformFromPostgres(r));
+    const camelRecords = records.map(r => transformFromPostgres(tableName, r));
 
     const columns = Object.keys(camelRecords[0]).filter(c => c !== 'id');
     const allColumns = ['id', ...columns];
 
-    // RÃ©cupÃ©rer les colonnes rÃ©elles de la table SQLite
     const tableInfo = db.prepare(`PRAGMA table_info(${tableName})`).all() as { name: string }[];
     const existingColumns = new Set(tableInfo.map(c => c.name));
+    const hasSyncStatus = existingColumns.has('sync_status');
 
     const insertCols = allColumns.filter(c => existingColumns.has(c));
     const insertPlaceholders = insertCols.map(() => '?').join(', ');
@@ -328,9 +337,22 @@ class SyncService {
       INSERT OR REPLACE INTO ${tableName} (${insertCols.join(', ')})
       VALUES (${insertPlaceholders})
     `);
+    const selectStmt = db.prepare(`SELECT version FROM ${tableName} WHERE id = ?`);
 
     const transaction = db.transaction(() => {
       for (const record of camelRecords) {
+        const remoteVersion = (record.version as number) || 0;
+
+        if (hasSyncStatus) {
+          (record as any).sync_status = 'synced';
+        }
+
+        const localVersion = (selectStmt.get(record.id) as { version: number } | undefined)?.version || 0;
+
+        if (localVersion > 0 && remoteVersion > 0 && localVersion > remoteVersion) {
+          continue;
+        }
+
         const values = insertCols.map(c => {
           const val = record[c];
           if (val === undefined) return null;
@@ -349,7 +371,7 @@ class SyncService {
 
   startBackgroundSync(intervalMs: number = 300000) {
     if (this.intervalId) return;
-    console.log(`[SYNC] Sync automatique activÃ©e (intervalle: ${intervalMs / 1000}s)`);
+    console.log(`[SYNC] Sync automatique activée (intervalle: ${intervalMs / 1000}s)`);
 
     this.intervalId = setInterval(async () => {
       if (this.isRunning) return;
@@ -381,7 +403,7 @@ class SyncService {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-      console.log('[SYNC] Sync automatique arrÃªtÃ©e');
+      console.log('[SYNC] Sync automatique arrêtée');
     }
   }
 

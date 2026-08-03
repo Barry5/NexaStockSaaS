@@ -61,7 +61,7 @@ export function markCompleted(id: string) {
 export function markFailed(id: string, error: string) {
   db.prepare(`
     UPDATE sync_queue
-    SET status = 'failed', retry_count = retry_count + 1, last_error = ?, max_retries = CASE WHEN retry_count + 1 >= max_retries THEN max_retries ELSE max_retries END
+    SET status = 'failed', retry_count = retry_count + 1, last_error = ?
     WHERE id = ?
   `).run(error, id);
 }

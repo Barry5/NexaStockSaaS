@@ -229,7 +229,7 @@ function enqueueStateDeletions(clientState: Record<string, unknown>): number {
 }
 
 // GET /api/sync/changes?since=ISO_TIMESTAMP - Delta sync endpoint
-router.get('/changes', (req, res, next) => {
+router.get('/changes', authenticateToken, (req: AuthenticatedRequest, res, next) => {
   try {
     const since = req.query.since as string;
     if (!since) return res.status(400).json({ error: 'Paramètre since requis (ISO timestamp).' });
@@ -237,13 +237,13 @@ router.get('/changes', (req, res, next) => {
     const changes: Record<string, any[]> = {};
     for (const table of SYNC_TABLES) {
       const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-      const hasUpdatedAt = tableInfo.some(c => c.name === 'updated_at');
-      const hasCreatedAt = tableInfo.some(c => c.name === 'created_at');
+      const hasUpdatedAt = tableInfo.some(c => c.name === 'updatedAt');
+      const hasCreatedAt = tableInfo.some(c => c.name === 'createdAt');
 
       if (hasUpdatedAt) {
-        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE updated_at >= ?`).all(since) as any[];
+        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE updatedAt >= ?`).all(since) as any[];
       } else if (hasCreatedAt) {
-        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE created_at >= ?`).all(since) as any[];
+        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE createdAt >= ?`).all(since) as any[];
       } else {
         changes[table] = [];
       }
@@ -281,10 +281,9 @@ router.post('/reset-from-cloud', authenticateToken, requireRole(['superadmin']),
 });
 
 // GET /api/sync/reset-app?key=nexastock-reset-2026
-// ONE-CLICK reset — clear local + pull from Supabase
-// Paste this URL in the browser address bar (no console, no auth header needed)
+// ONE-CLICK reset — clear local + pull from Supabase (superadmin only)
 const RESET_KEY = process.env.RESET_KEY || 'nexastock-reset-2026';
-router.get('/reset-app', (req, res) => {
+router.get('/reset-app', authenticateToken, requireRole(['superadmin']), (req, res) => {
   try {
     const key = req.query.key as string;
     if (key !== RESET_KEY) {
@@ -465,7 +464,7 @@ router.post('/trigger', authenticateToken, requireRole(['superadmin']), async (r
 });
 
 // GET: Compile and return full DB state
-router.get('/', (req, res, next) => {
+router.get('/', authenticateToken, (req: AuthenticatedRequest, res, next) => {
   try {
     const state = compileCompleteState();
     res.json(state);
@@ -475,7 +474,7 @@ router.get('/', (req, res, next) => {
 });
 
 // GET /api/sync/pull?since=ISO_TIMESTAMP - Incremental pull (changes + deletions)
-router.get('/pull', (req, res, next) => {
+router.get('/pull', authenticateToken, (req: AuthenticatedRequest, res, next) => {
   try {
     const since = req.query.since as string;
     if (!since) return res.status(400).json({ error: 'Paramètre since requis (ISO timestamp).' });

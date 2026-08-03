@@ -161,10 +161,10 @@ app.use('/api/affiliate-portal', affiliatePortalRouter);
 
 // Sync and Compatibility routes (supporting existing front-end calls)
 app.use('/api/sync', syncRouter);
-app.post('/api/db/sync', syncRouter);
+app.post('/api/db/sync', authenticate, requireRole(['superadmin']), syncRouter);
 
-// GET /api/db for direct sync compilation
-app.get('/api/db', (req, res, next) => {
+// GET /api/db for direct sync compilation (superadmin only — returns full DB dump incl. password hashes)
+app.get('/api/db', authenticate, requireRole(['superadmin']), (req, res, next) => {
   try {
     const state = compileCompleteState();
     res.json(state);

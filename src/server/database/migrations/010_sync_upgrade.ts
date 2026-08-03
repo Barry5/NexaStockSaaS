@@ -28,6 +28,13 @@ export function up(db: Database) {
     if (!colNames.has('createdAt')) {
       try { db.exec(`ALTER TABLE ${table} ADD COLUMN createdAt TEXT`); } catch {}
     }
+    // Soft-delete column (camelCase, matching the domain tables' convention and
+    // aligned with the PostgreSQL `deleted_at` column via the camelCase↔snake_case
+    // transform layer). Without this, LocalRepository.delete() hard-deletes and
+    // sync-down resurrects PostgreSQL soft-deletes as live records.
+    if (!colNames.has('deletedAt') && !colNames.has('deleted_at')) {
+      try { db.exec(`ALTER TABLE ${table} ADD COLUMN deletedAt TEXT`); } catch {}
+    }
   }
 
   db.exec(`

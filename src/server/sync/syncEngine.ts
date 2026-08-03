@@ -1,4 +1,4 @@
-﻿import db from '../database/db.js';
+﻿﻿import db from '../database/db.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as SyncQueue from './syncQueue.js';
 import { SYNC_TABLE_SET, SYNC_TABLES } from './syncTables.js';
@@ -95,7 +95,7 @@ export class SyncEngine {
           const { table, recordId, operation, data, version, deviceId, companyId } = change;
 
           if (!SYNC_TABLE_SET.has(table)) {
-            result.errors.push({ table, recordId, error: `Table ${table} non autorisÃ©e` });
+            result.errors.push({ table, recordId, error: `Table ${table} non autorisée` });
             continue;
           }
 

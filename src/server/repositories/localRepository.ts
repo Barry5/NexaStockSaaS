@@ -29,8 +29,15 @@ export class LocalRepository<T extends Syncable> implements Repository<T> {
     return null;
   }
 
+  private deletedAtColumn(): string | null {
+    if (this.hasColumn('deletedAt')) return 'deletedAt';
+    if (this.hasColumn('deleted_at')) return 'deleted_at';
+    return null;
+  }
+
   private liveWhereClause(): string {
-    return this.hasColumn('deleted_at') ? ' AND deleted_at IS NULL' : '';
+    const col = this.deletedAtColumn();
+    return col ? ` AND ${col} IS NULL` : '';
   }
 
   getAll(tenantId?: string): T[] {
@@ -43,7 +50,7 @@ export class LocalRepository<T extends Syncable> implements Repository<T> {
       where.push('tenant_id = ?');
       params.push(tenantId);
     }
-    if (this.hasColumn('deleted_at')) where.push('deleted_at IS NULL');
+    { const dc = this.deletedAtColumn(); if (dc) where.push(`${dc} IS NULL`); }
 
     const orderCol = this.timestampColumn('created');
     const sql = [
@@ -111,10 +118,11 @@ export class LocalRepository<T extends Syncable> implements Repository<T> {
     const existing = this.getById(id);
     if (!existing) return false;
 
-    if (this.hasColumn('deleted_at')) {
-      const updates: Record<string, unknown> = { deleted_at: new Date().toISOString() };
+    const deletedCol = this.deletedAtColumn();
+    if (deletedCol) {
+      const updates: Record<string, unknown> = { [deletedCol]: new Date().toISOString() };
       const updatedCol = this.timestampColumn('updated');
-      if (updatedCol) updates[updatedCol] = updates.deleted_at;
+      if (updatedCol) updates[updatedCol] = updates[deletedCol];
       if (this.hasColumn('sync_status')) updates.sync_status = 'pending';
       const cols = Object.keys(updates).filter(c => this.hasColumn(c));
       const setClause = cols.map(c => `${c} = ?`).join(', ');
@@ -140,7 +148,7 @@ export class LocalRepository<T extends Syncable> implements Repository<T> {
       where.push('tenant_id = ?');
       params.push(tenantId);
     }
-    if (this.hasColumn('deleted_at')) where.push('deleted_at IS NULL');
+    { const dc = this.deletedAtColumn(); if (dc) where.push(`${dc} IS NULL`); }
     const sql = `SELECT COUNT(*) as count FROM ${this.tableName}${where.length ? ` WHERE ${where.join(' AND ')}` : ''}`;
     const row = db.prepare(sql).get(...params) as { count: number };
     return row.count;
