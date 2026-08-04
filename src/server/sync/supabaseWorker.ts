@@ -3,6 +3,8 @@ import { syncEngine } from './syncEngine.js';
 import { isSupabaseConfigured, checkConnection, batchUpsert } from '../services/supabase/supabaseService.js';
 import { transformToPostgres, getConflictColumn, getDeleteCriteria } from '../services/supabase/transform.js';
 import { SYNC_TABLE_SET } from './syncTables.js';
+import fs from 'fs';
+import path from 'path';
 
 interface WorkerStatus {
   running: boolean;
@@ -15,6 +17,10 @@ interface WorkerStatus {
   failedCount: number;
 }
 
+// Durée de vie d'un lock de worker avant qu'il ne soit considéré comme orphelin
+// (crash du process sans nettoyage). Au-delà, un nouveau worker peut démarrer.
+const WORKER_LOCK_STALE_MS = 10 * 60 * 1000;
+
 export class SupabaseWorker {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
@@ -25,12 +31,18 @@ export class SupabaseWorker {
   private startedAt = 0;
   private consecutiveErrors = 0;
   private baseIntervalMs: number;
+  private lockPath: string;
 
   constructor(
     private intervalMs: number = 15000,
     private batchSize: number = 25,
   ) {
     this.baseIntervalMs = intervalMs;
+    // Lock fichier multi-process (Phase 4) : un seul worker actif par volume de
+    // données. Le chemin dépend du SNAPSHOT_PATH/DB_PATH (défini dans db.js).
+    const dbPath = process.env.DB_PATH || 'data/database.db';
+    const dir = path.dirname(dbPath);
+    this.lockPath = path.join(dir, '.supabase-worker.lock');
   }
 
   private getEffectiveInterval(): number {
@@ -52,8 +64,39 @@ export class SupabaseWorker {
     }
   }
 
+  // Verrou fichier (Phase 4, M5) : empêche deux workers (deux process, deux
+  // instances) de pousser/pull simultanément le même volume de données, ce qui
+  // gonflerait les versions PG et créerait des courses.
+  private acquireLock(): boolean {
+    try {
+      if (!fs.existsSync(this.lockPath)) {
+        fs.writeFileSync(this.lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf8');
+        return true;
+      }
+      const stat = fs.statSync(this.lockPath);
+      const stale = Date.now() - stat.mtimeMs > WORKER_LOCK_STALE_MS;
+      if (stale) {
+        console.warn('[SUPABASE_WORKER] Lock orphelin (crash précédent ?) - reprise du verrou');
+        fs.writeFileSync(this.lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf8');
+        return true;
+      }
+      console.warn(`[SUPABASE_WORKER] Un autre worker est actif (lock ${this.lockPath}) - arrêt sans démarrer`);
+      return false;
+    } catch {
+      // Pas de FS (tests) : on laisse tourner (le verrou en-process isRunning suffit).
+      return true;
+    }
+  }
+
+  private releaseLock(): void {
+    try {
+      if (fs.existsSync(this.lockPath)) fs.unlinkSync(this.lockPath);
+    } catch { /* ignore */ }
+  }
+
   async start(): Promise<void> {
     if (this.intervalId) return;
+    if (!this.acquireLock()) return;
 
     this.startedAt = Date.now();
     this.online = await this.checkConnectivity();
@@ -73,6 +116,7 @@ export class SupabaseWorker {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    this.releaseLock();
     console.log('[SUPABASE_WORKER] Stopped');
   }
 
@@ -110,13 +154,10 @@ export class SupabaseWorker {
         }
       }
 
-      const queueResult = await this.processQueue();
-      if (queueResult.processed > 0) {
-        this.lastResult = 'queue: ' + queueResult.processed + ' processed, ' + queueResult.failed + ' failed';
-      }
-
+      // Pipeline unique (Phase 1) : plus de processQueue — tout passe par le
+      // changelog (syncEngine.logChange) pour éviter le double-push.
       const changelogResult = await this.processChangelog();
-      if (changelogResult.processed > 0) {
+      if (changelogResult.processed > 0 || changelogResult.failed > 0) {
         this.lastResult = 'changelog: ' + changelogResult.processed + ' pushed, ' + changelogResult.failed + ' failed';
       }
 
@@ -126,7 +167,20 @@ export class SupabaseWorker {
         this.lastResult = 'pull: ' + downResult.pulled + ' records';
       }
 
-      if (queueResult.processed === 0 && changelogResult.processed === 0 && downResult.pulled === 0) {
+      // Réconciliation périodique (Phase 2, M3) : purge des lignes fantômes
+      // locales et rattrapage des lignes PG jamais pullées.
+      if (this.cycleCount > 0 && this.cycleCount % 20 === 0) {
+        try {
+          const rec = await syncService.reconcileLocalWithRemote();
+          if (rec.repaired > 0) {
+            this.lastResult = 'reconcile: ' + rec.repaired + ' tables réparées';
+          }
+        } catch (e: any) {
+          console.warn('[SUPABASE_WORKER] Reconcile failed:', e?.message || e);
+        }
+      }
+
+      if (changelogResult.processed === 0 && changelogResult.failed === 0 && downResult.pulled === 0) {
         this.lastResult = 'idle';
       }
 
@@ -159,6 +213,8 @@ export class SupabaseWorker {
     }
   }
 
+  // Drain LEGACY de la file sync_queue (pré-déploiement du pipeline unique).
+  // Conservé pour compatibilité / usage manuel ; non appelé par tick().
   private async processQueue(): Promise<{ processed: number; failed: number }> {
     const items = SyncQueue.dequeue(this.batchSize);
     if (items.length === 0) return { processed: 0, failed: 0 };
@@ -212,7 +268,8 @@ export class SupabaseWorker {
           const { error } = await admin.from(mapping).delete().eq(column, value);
           if (error) throw error;
         } else {
-          const record = JSON.parse(change.data);
+          const { syncService } = await import('./syncService.js');
+          const record = syncService.getCurrentRecordForPush(change.table, change.recordId, change.data);
           const pgRecord = transformToPostgres(change.table, record);
           const result = await batchUpsert(mapping, [pgRecord], getConflictColumn(mapping));
           if (result.errors.length > 0) throw new Error(result.errors.join('; '));
@@ -221,6 +278,9 @@ export class SupabaseWorker {
         processed++;
         pushedIds.push(change.changeId);
       } catch (err: any) {
+        // Retry borné + dead-letter : incrémente retry_count, passe en 'dead'
+        // au-delà de max_retries (visible via /api/sync/failed).
+        syncEngine.markChangeFailed(change.changeId);
         failed++;
       }
     }

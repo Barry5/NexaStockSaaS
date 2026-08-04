@@ -1,5 +1,5 @@
 import db from '../../database/db.js';
-import { enqueue } from '../../sync/syncQueue.js';
+import { syncEngine } from '../../sync/syncEngine.js';
 import { syncService } from '../../sync/syncService.js';
 import type { SyncOperation } from '../../sync/syncQueue.js';
 
@@ -59,9 +59,12 @@ export abstract class BaseService {
   }
 
   protected enqueueSyncFor(tableName: string, recordId: string, operation: SyncOperation, payload: Record<string, unknown>, companyId?: string, deviceId?: string): void {
-    enqueue(tableName, recordId, operation, payload, companyId, deviceId);
+    // Pipeline unique (Phase 1) : journalise dans sync_changelog (retry borné,
+    // dead-letter) au lieu de sync_queue. Le push est déclenché par le
+    // SupabaseWorker ; on force un cycle immédiat quand on est en ligne.
+    syncEngine.logChange(tableName, recordId, operation, payload, companyId, deviceId);
     if (syncService.isOnline()) {
-      syncService.syncUp().catch(() => {});
+      syncService.syncUpFromChangelog().catch(() => {});
     }
   }
 

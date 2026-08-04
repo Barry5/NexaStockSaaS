@@ -1,7 +1,7 @@
 import { LocalRepository } from './localRepository.js';
 import { RemoteRepository } from './remoteRepository.js';
 import { syncService } from '../sync/syncService.js';
-import { enqueue } from '../sync/syncQueue.js';
+import { syncEngine } from '../sync/syncEngine.js';
 import type { Syncable } from './baseRepository.js';
 import type { SyncOperation } from '../sync/syncQueue.js';
 
@@ -28,7 +28,7 @@ export class SyncRepository<T extends Syncable> {
   create(data: Partial<T>, companyId?: string, deviceId?: string): T {
     const record = this.local.create(data);
 
-    enqueue(
+    syncEngine.logChange(
       this.tableName,
       (record as any)[this.idColumn],
       'CREATE',
@@ -45,7 +45,7 @@ export class SyncRepository<T extends Syncable> {
     const record = this.local.update(id, data);
     if (!record) return null;
 
-    enqueue(
+    syncEngine.logChange(
       this.tableName,
       id,
       'UPDATE',
@@ -64,7 +64,7 @@ export class SyncRepository<T extends Syncable> {
 
     const result = this.local.delete(id);
 
-    enqueue(
+    syncEngine.logChange(
       this.tableName,
       id,
       'DELETE',
@@ -87,7 +87,7 @@ export class SyncRepository<T extends Syncable> {
 
   private triggerBackgroundSync() {
     if (syncService.isOnline()) {
-      syncService.syncUp().catch(() => {});
+      syncService.syncUpFromChangelog().catch(() => {});
     }
   }
 }

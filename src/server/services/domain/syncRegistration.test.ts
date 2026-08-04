@@ -14,7 +14,7 @@ let tempDir: string;
 
 function queueRows(table: string, op?: string): any[] {
   const rows = db.prepare(
-    `SELECT * FROM sync_queue WHERE table_name = ? ${op ? 'AND operation = ?' : ''} ORDER BY created_at ASC, rowid ASC`
+    `SELECT * FROM sync_changelog WHERE table_name = ? ${op ? 'AND operation = ?' : ''} ORDER BY created_at ASC, rowid ASC`
   ).all(op ? [table, op] : [table]) as any[];
   return rows;
 }
@@ -65,14 +65,14 @@ describe('enregistrement systématique des écritures pour la synchronisation', 
 
     const create = lastQueueRow('pricing_plans', 'CREATE');
     expect(create).toBeTruthy();
-    expect(JSON.parse(create.payload).legacy_id).toBe(plan.id);
+    expect(JSON.parse(create.new_values).legacy_id).toBe(plan.id);
 
     const updated = pricingPlanService.update(plan.id, { price: 19.99, active: false });
     expect(updated.price).toBe(19.99);
     expect(updated.active).toBe(false);
     const update = lastQueueRow('pricing_plans', 'UPDATE');
     expect(update).toBeTruthy();
-    expect(update.payload).toContain('19.99');
+    expect(update.new_values).toContain('19.99');
 
     expect(pricingPlanService.remove(plan.id)).toBe(true);
     const del = lastQueueRow('pricing_plans', 'DELETE');
@@ -91,14 +91,14 @@ describe('enregistrement systématique des écritures pour la synchronisation', 
     tenantService.updateSettings({ trialDays: 21, gracePeriodDays: 7, revertToPlanOnExpiry: 'ReadOnly' });
     const row = lastQueueRow('global_saas_settings', 'UPDATE');
     expect(row).toBeTruthy();
-    expect(row.payload).toContain('"trialDays":21');
+    expect(row.new_values).toContain('"trialDays":21');
   });
 
   it('enregistre les overrides de modules par entreprise (tenant_modules)', () => {
     moduleService.setTenantModuleOverride('t-test-1', 'products', false);
     const row = lastQueueRow('tenant_modules', 'CREATE');
     expect(row).toBeTruthy();
-    expect(row.payload).toContain('"enabled":false');
+    expect(row.new_values).toContain('"enabled":false');
     moduleService.setTenantModuleOverride('t-test-1', 'products', true);
     const row2 = lastQueueRow('tenant_modules', 'UPDATE');
     expect(row2).toBeTruthy();
@@ -114,15 +114,15 @@ describe('enregistrement systématique des écritures pour la synchronisation', 
 
     const pay = lastQueueRow('payments', 'CREATE');
     expect(pay).toBeTruthy();
-    expect(pay.payload).toContain('"amount":40');
+    expect(pay.new_values).toContain('"amount":40');
 
     const audit = lastQueueRow('invoice_audit_log', 'CREATE');
     expect(audit).toBeTruthy();
-    expect(audit.payload).toContain('PAYMENT_RECORDED');
+    expect(audit.new_values).toContain('PAYMENT_RECORDED');
 
     const invoiceUpdate = lastQueueRow('invoices', 'UPDATE');
     expect(invoiceUpdate).toBeTruthy();
-    expect(invoiceUpdate.payload).toContain('"paidAmount":40');
+    expect(invoiceUpdate.new_values).toContain('"paidAmount":40');
   });
 
   it('crée les factures avec un payload de sync propre sans items embarqués', () => {
@@ -135,7 +135,7 @@ describe('enregistrement systématique des écritures pour la synchronisation', 
     }, 't-test-1', 'u-1', 'Superadmin');
     const create = lastQueueRow('invoices', 'CREATE');
     expect(create).toBeTruthy();
-    const payload = JSON.parse(create.payload);
+    const payload = JSON.parse(create.new_values);
     expect(payload.items).toBeUndefined();
     expect(payload.date).toBeDefined();
     expect(payload.legacy_id).toBe(invoice.id);
@@ -147,22 +147,22 @@ describe('enregistrement systématique des écritures pour la synchronisation', 
     rbacService.updateRolePermissions('role-test-1', { 'products.view': true });
     const rp = lastQueueRow('role_permissions', 'CREATE');
     expect(rp).toBeTruthy();
-    expect(rp.payload).toContain('"roleId":"role-test-1"');
-    expect(rp.payload).toContain('"permissionId":"perm-products-view"');
+    expect(rp.new_values).toContain('"roleId":"role-test-1"');
+    expect(rp.new_values).toContain('"permissionId":"perm-products-view"');
 
     rbacService.updateRole('role-test-1', { label: 'Test Role V2' });
     const role = lastQueueRow('roles', 'UPDATE');
     expect(role).toBeTruthy();
-    expect(role.payload).toContain('Test Role V2');
+    expect(role.new_values).toContain('Test Role V2');
   });
 
   it('enregistre les traces d\'audit des entreprises réelles, jamais pour le pseudo-tenant superadmin', () => {
     tenantService.updateTenantStatus('t-test-1', 'SUSPENDED');
     const audit = lastQueueRow('audit_logs', 'CREATE');
     expect(audit).toBeTruthy();
-    expect(audit.payload).toContain('TENANT_SUSPENDED');
+    expect(audit.new_values).toContain('TENANT_SUSPENDED');
 
-    const superadminAudits = db.prepare(`SELECT COUNT(*) as c FROM sync_queue WHERE table_name = 'audit_logs' AND payload LIKE '%"tenantId":"superadmin"%'`).get() as { c: number };
+    const superadminAudits = db.prepare(`SELECT COUNT(*) as c FROM sync_changelog WHERE table_name = 'audit_logs' AND new_values LIKE '%"tenantId":"superadmin"%'`).get() as { c: number };
     expect(superadminAudits.c).toBe(0);
   });
 

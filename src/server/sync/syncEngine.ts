@@ -1,7 +1,10 @@
 ﻿import db from '../database/db.js';
 import { v4 as uuidv4 } from 'uuid';
-import * as SyncQueue from './syncQueue.js';
 import { SYNC_TABLE_SET, SYNC_TABLES, tablePriorityCase } from './syncTables.js';
+
+// Nombre maximal de tentatives de push d'une entrée du changelog avant de la
+// passer en dead-letter (status = 'dead'). Visible via /api/sync/failed.
+export const CHANGELOG_MAX_RETRIES = 10;
 
 export type SyncOperation = 'CREATE' | 'UPDATE' | 'DELETE';
 
@@ -63,8 +66,58 @@ export class SyncEngine {
       deviceId || null, companyId || null,
     );
 
-    SyncQueue.enqueue(tableName, recordId, operation, newValues || {}, companyId, deviceId);
+    return id;
+  }
 
+  // Pipeline unique de synchronisation (Phase 1) : journalise un changement
+  // dans sync_changelog (+ tombstone sync_deletions pour les DELETEs) SANS
+  // passer par sync_queue. Appelé par les services métier (baseService).
+  // Atomicité : version + updatedAt de la ligne locale sont mis à jour dans la
+  // même transaction SQLite que l'entrée du changelog.
+  logChange(
+    tableName: string,
+    recordId: string,
+    operation: SyncOperation,
+    payload?: Record<string, unknown> | null,
+    companyId?: string,
+    deviceId?: string,
+  ): string {
+    const id = `chg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const now = new Date().toISOString();
+
+    const transaction = db.transaction(() => {
+      const existing = this.getRecord(tableName, recordId);
+      const currentVersion = existing ? (existing.version as number) || 0 : 0;
+      const nextVersion = currentVersion + 1;
+
+      if (operation !== 'DELETE' && existing) {
+        try {
+          db.prepare(`UPDATE ${tableName} SET version = ?, updatedAt = ? WHERE id = ?`).run(nextVersion, now, recordId);
+        } catch {
+          // Table sans colonne version/updatedAt (RBAC) : la version reste
+          // gérée côté changelog + triggers PostgreSQL.
+        }
+      }
+
+      db.prepare(`
+        INSERT INTO sync_changelog (id, table_name, record_id, operation, old_values, new_values, old_version, new_version, created_at, device_id, company_id, retry_count, max_retries, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending')
+      `).run(
+        id, tableName, recordId, operation,
+        existing ? JSON.stringify(existing) : null,
+        payload ? JSON.stringify(payload) : null,
+        currentVersion, nextVersion, now,
+        deviceId || null, companyId || null,
+        CHANGELOG_MAX_RETRIES,
+      );
+
+      if (operation === 'DELETE') {
+        db.prepare(`INSERT OR REPLACE INTO sync_deletions (id, table_name, record_id, deleted_at, company_id) VALUES (?, ?, ?, ?, ?)`).run(
+          `del-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, tableName, recordId, now, companyId || null,
+        );
+      }
+    });
+    transaction();
     return id;
   }
 
@@ -125,21 +178,21 @@ export class SyncEngine {
 
           if (operation === 'CREATE') {
             if (existing) {
-              if (clientVersion > 0 && serverVersion > 0 && clientVersion !== serverVersion) {
-                const conflict = this.buildConflict(table, recordId, clientVersion, serverVersion, data, existing as Record<string, unknown>);
-                const resolved = this.resolveConflict('remote_wins', data, existing as Record<string, unknown>);
-                conflict.resolvedData = resolved;
+              if (clientVersion > 0 && serverVersion > 0 && clientVersion < serverVersion) {
+                // Snapshot périmé : l'état local (plus récent) gagne. Rien n'est
+                // appliqué, le conflit est journalisé pour le superadmin.
+                const conflict = this.buildConflict(table, recordId, clientVersion, serverVersion, data, existing as Record<string, unknown>, 'server_wins');
+                conflict.resolvedData = existing as Record<string, unknown>;
                 result.conflicts.push(conflict);
-                this.recordChange(table, recordId, 'UPDATE', existing as Record<string, unknown>, resolved, serverVersion, serverVersion + 1, companyId, deviceId);
-                this.applyRecord(table, colNames, recordId, resolved);
                 result.applied++;
                 continue;
               }
-              const oldVals = existing as Record<string, unknown>;
-              const newVals = { ...oldVals, ...data };
-              const nextVersion = this.incrementVersion(table, recordId);
-              this.recordChange(table, recordId, 'UPDATE', oldVals, newVals, serverVersion, nextVersion, companyId, deviceId);
-              this.applyRecord(table, colNames, recordId, { ...newVals, version: nextVersion });
+              const conflict = this.buildConflict(table, recordId, clientVersion, serverVersion, data, existing as Record<string, unknown>);
+              const resolved = this.resolveConflict('remote_wins', data, existing as Record<string, unknown>);
+              conflict.resolvedData = resolved;
+              result.conflicts.push(conflict);
+              this.recordChange(table, recordId, 'UPDATE', existing as Record<string, unknown>, resolved, serverVersion, serverVersion + 1, companyId, deviceId);
+              this.applyRecord(table, colNames, recordId, resolved);
               result.applied++;
               continue;
             }
@@ -159,28 +212,22 @@ export class SyncEngine {
               continue;
             }
 
-            if (serverVersion === clientVersion || clientVersion === 0) {
-              const oldVals = existing as Record<string, unknown>;
-              const newVals = { ...oldVals, ...data };
-              const nextVersion = this.incrementVersion(table, recordId);
-              this.recordChange(table, recordId, 'UPDATE', oldVals, newVals, serverVersion, nextVersion, companyId, deviceId);
-              this.applyRecord(table, colNames, recordId, { ...newVals, version: nextVersion });
+            if (clientVersion > 0 && serverVersion > 0 && clientVersion < serverVersion) {
+              // Snapshot périmé (LWW par version) : l'état local plus récent
+              // gagne. Aucun écrasement, conflit journalisé côté serveur.
+              const conflict = this.buildConflict(table, recordId, clientVersion, serverVersion, data, existing as Record<string, unknown>, 'server_wins');
+              conflict.resolvedData = existing as Record<string, unknown>;
+              result.conflicts.push(conflict);
               result.applied++;
-            } else if (clientVersion > serverVersion) {
-              const oldVals = existing as Record<string, unknown>;
-              const newVals = { ...oldVals, ...data };
-              const nextVersion = clientVersion + 1;
-              this.recordChange(table, recordId, 'UPDATE', oldVals, newVals, serverVersion, nextVersion, companyId, deviceId);
-              this.applyRecord(table, colNames, recordId, { ...newVals, version: nextVersion });
-              result.applied++;
-            } else {
-              const oldVals = existing as Record<string, unknown>;
-              const newVals = { ...oldVals, ...data };
-              const nextVersion = serverVersion + 1;
-              this.recordChange(table, recordId, 'UPDATE', oldVals, newVals, serverVersion, nextVersion, companyId, deviceId);
-              this.applyRecord(table, colNames, recordId, { ...newVals, version: nextVersion });
-              result.applied++;
+              continue;
             }
+
+            const oldVals = existing as Record<string, unknown>;
+            const newVals = { ...oldVals, ...data };
+            const nextVersion = Math.max(clientVersion, serverVersion) + 1;
+            this.recordChange(table, recordId, 'UPDATE', oldVals, newVals, serverVersion, nextVersion, companyId, deviceId);
+            this.applyRecord(table, colNames, recordId, { ...newVals, version: nextVersion });
+            result.applied++;
           }
         } catch (err: any) {
           result.errors.push({ table: change.table, recordId: change.recordId, error: err.message });
@@ -224,9 +271,13 @@ export class SyncEngine {
   }
 
   getChangesForSupabase(): { changeId: string; table: string; recordId: string; operation: string; data: string }[] {
+    // Retry borné : seuls les items 'pending'/'failed' avec retry_count <
+    // max_retries sont rejoués. Au-delà -> status 'dead' (dead-letter).
     const items = db.prepare(`
       SELECT c.* FROM sync_changelog c
       WHERE c.pushed_to_supabase = 0
+        AND c.status != 'dead'
+        AND c.retry_count < c.max_retries
       ORDER BY ${tablePriorityCase('c.table_name')}, c.created_at ASC
       LIMIT 200
     `).all() as any[];
@@ -243,7 +294,52 @@ export class SyncEngine {
   markPushedToSupabase(ids: string[]) {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => '?').join(', ');
-    db.prepare(`UPDATE sync_changelog SET pushed_to_supabase = 1 WHERE id IN (${placeholders})`).run(...ids);
+    db.prepare(`UPDATE sync_changelog SET pushed_to_supabase = 1, status = 'pushed' WHERE id IN (${placeholders})`).run(...ids);
+  }
+
+  markChangeFailed(changeId: string) {
+    db.prepare(`
+      UPDATE sync_changelog
+      SET retry_count = retry_count + 1,
+          status = CASE WHEN retry_count + 1 >= max_retries THEN 'dead' ELSE 'failed' END
+      WHERE id = ?
+    `).run(changeId);
+  }
+
+  resetDeadChanges(tableName?: string): number {
+    if (tableName) {
+      return db.prepare(`
+        UPDATE sync_changelog SET status = 'pending', retry_count = 0
+        WHERE status = 'dead' AND table_name = ?
+      `).run(tableName).changes;
+    }
+    return db.prepare(`
+      UPDATE sync_changelog SET status = 'pending', retry_count = 0
+      WHERE status = 'dead'
+    `).run().changes;
+  }
+
+  getDeadChanges(limit: number = 200): any[] {
+    return db.prepare(`
+      SELECT id, table_name, record_id, operation, retry_count, max_retries, status, created_at, company_id, device_id
+      FROM sync_changelog
+      WHERE status = 'dead'
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).all(limit) as any[];
+  }
+
+  getDeadChangeCount(): number {
+    const row = db.prepare(`SELECT COUNT(*) as count FROM sync_changelog WHERE status = 'dead'`).get() as { count: number };
+    return row.count;
+  }
+
+  hasPendingChangesForTable(tableName: string): boolean {
+    const row = db.prepare(`
+      SELECT COUNT(*) as count FROM sync_changelog
+      WHERE table_name = ? AND pushed_to_supabase = 0 AND status != 'dead'
+    `).get(tableName) as { count: number };
+    return row.count > 0;
   }
 
   getPendingChangesSummary(): {
@@ -251,11 +347,12 @@ export class SyncEngine {
     changelogByTable: Array<{ table_name: string; create: number; update: number; delete: number }>;
     deletionCount: number;
     deletionsByTable: Array<{ table_name: string; count: number }>;
+    deadChangeCount: number;
   } {
     const changelogRows = db.prepare(`
       SELECT table_name, operation, COUNT(*) as count
       FROM sync_changelog
-      WHERE pushed_to_supabase = 0
+      WHERE pushed_to_supabase = 0 AND status != 'dead'
       GROUP BY table_name, operation
     `).all() as { table_name: string; operation: string; count: number }[];
 
@@ -288,6 +385,7 @@ export class SyncEngine {
       changelogByTable: Array.from(changeMap.values()).sort((a, b) => a.table_name.localeCompare(b.table_name)),
       deletionCount,
       deletionsByTable: deletionsByTable.sort((a, b) => a.table_name.localeCompare(b.table_name)),
+      deadChangeCount: this.getDeadChangeCount(),
     };
   }
 
@@ -295,6 +393,9 @@ export class SyncEngine {
   // la croissance infinie des tables sync_changelog / sync_deletions / sync_queue.
   cleanupPushedRecords(beforeIso?: string): number {
     const cutoff = beforeIso || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    // Purge des diagnostics > 30 j : les failed (queue) et dead (changelog)
+    // restent visibles via /api/sync/failed pendant 30 jours, puis sont purgés.
+    const cutoff30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     let removed = 0;
 
     const r1 = db.prepare(`DELETE FROM sync_changelog WHERE pushed_to_supabase = 1 AND created_at < ?`).run(cutoff);
@@ -306,8 +407,14 @@ export class SyncEngine {
     const r3 = db.prepare(`DELETE FROM sync_queue WHERE status = 'completed' AND created_at < ?`).run(cutoff);
     removed += r3.changes;
 
-    // Les items failed dépassant max_retries restent visibles via /api/sync/failed :
-    // on ne touche pas aux failed ici pour garder le diagnostic.
+    // Les items failed dépassant max_retries restent visibles via /api/sync/failed
+    // pendant 30 jours (diagnostic), puis sont purgés.
+    const r4 = db.prepare(`DELETE FROM sync_changelog WHERE status = 'dead' AND created_at < ?`).run(cutoff30d);
+    removed += r4.changes;
+
+    const r5 = db.prepare(`DELETE FROM sync_queue WHERE status = 'failed' AND created_at < ?`).run(cutoff30d);
+    removed += r5.changes;
+
     return removed;
   }
 
@@ -340,12 +447,13 @@ export class SyncEngine {
     table: string, recordId: string,
     clientVersion: number, serverVersion: number,
     clientData: Record<string, unknown>, serverData: Record<string, unknown>,
+    strategy: string = 'remote_wins',
   ): SyncConflict {
     return {
       table, recordId, clientVersion, serverVersion,
       clientData, serverData,
       resolvedData: {},
-      strategy: 'remote_wins',
+      strategy,
     };
   }
 

@@ -16,18 +16,27 @@ import { initializeDatabase } from './src/server/database/init.js';
 initializeDatabase();
 
 // Initialize Sync Service (background sync to Supabase)
+// Pipeline UNIQUE (Phase 1) : le SupabaseWorker est l'unique planificateur.
+// startBackgroundSync a été supprimé pour éviter le double-push.
 import { syncService } from './src/server/sync/syncService.js';
 import { supabaseWorker } from './src/server/sync/supabaseWorker.js';
 import { loadLastSyncTimestamps } from './src/server/sync/syncQueue.js';
 syncService.initialize().then(async () => {
   try {
     if (syncService.isOnline()) {
+      // 1. Drain LEGACY : purge une seule fois la file sync_queue des
+      //    versions précédentes (les nouvelles écritures passent par le changelog).
+      const legacyResult = await syncService.syncUp();
+      if (legacyResult.pushed > 0 || legacyResult.failed > 0) {
+        console.log(`[SERVER] Drain legacy sync_queue: ${legacyResult.pushed} pushed, ${legacyResult.failed} failed`);
+      }
+
       const trackingCount = loadLastSyncTimestamps().length;
       if (trackingCount === 0) {
         const pushResult = await syncService.fullPush();
         console.log(`[SERVER] Initial fullPush: ${pushResult.pushed} pushed, ${pushResult.failed} failed, ${pushResult.tables} tables`);
       } else {
-        // Pousse les tables jamais synchronisées (fullPush incrémental), puis la file + changelog
+        // Pousse les tables jamais synchronisées (fullPush incrémental), puis le changelog
         const pushResult = await syncService.fullPush(true);
         if (pushResult.pushed > 0 || pushResult.errors.length > 0) {
           console.log(`[SERVER] FullPush missing tables: ${pushResult.pushed} pushed, ${pushResult.failed} failed, ${pushResult.tables} tables`);
@@ -44,14 +53,12 @@ syncService.initialize().then(async () => {
   } catch (err: any) {
     console.error('[SERVER] Erreur lors du sync de démarrage:', err?.message || err);
   }
-  syncService.startBackgroundSync(60000);
   supabaseWorker.start();
-  console.log('[SERVER] Sync service + Supabase worker started');
+  console.log('[SERVER] Supabase worker started (pipeline unique)');
 }).catch(err => {
   console.error('[SERVER] Initialisation du service de sync échouée:', err?.message || err);
-  syncService.startBackgroundSync(60000);
   supabaseWorker.start();
-  console.log('[SERVER] Sync service + Supabase worker started (mode dégradé)');
+  console.log('[SERVER] Supabase worker started (mode dégradé)');
 });
 
 // Import Router Modules

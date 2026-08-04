@@ -1,6 +1,6 @@
 ﻿import db from '../database/db.js';
-import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, getChangesSinceByCreatedAt } from '../services/supabase/supabaseService.js';
-import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria, recordUuidMapping } from '../services/supabase/transform.js';
+import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, getChangesSinceByCreatedAt, countRemoteRows, fetchAllLegacyIds, type PullCursor } from '../services/supabase/supabaseService.js';
+import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria, recordUuidMapping, NO_LEGACY_ID_TABLES } from '../services/supabase/transform.js';
 import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
 import { TABLE_MAPPINGS, TABLES_WITHOUT_UPDATED_AT } from './syncTables.js';
@@ -48,6 +48,9 @@ class SyncService {
     return this.online;
   }
 
+  // Drain LEGACY de la file sync_queue (pré-déploiement du pipeline unique).
+  // À n'appeler qu'une fois au démarrage : les nouvelles écritures passent
+  // exclusivement par sync_changelog (syncUpFromChangelog).
   async syncUp(): Promise<{ pushed: number; failed: number; errors: string[] }> {
     if (!await this.checkConnectivity()) {
       return { pushed: 0, failed: 0, errors: ['Supabase non disponible'] };
@@ -85,6 +88,9 @@ class SyncService {
     return { pushed, failed, errors };
   }
 
+  // Pipeline UNIQUE de push (Phase 1) : sync_changelog -> Supabase.
+  // L'état poussé est relu depuis SQLite au moment du push (jamais un snapshot
+  // périmé) ; en cas d'échec, l'item est marqué failed/dead (retry borné).
   async syncUpFromChangelog(): Promise<{ pushed: number; failed: number; errors: string[] }> {
     if (!await this.checkConnectivity()) {
       return { pushed: 0, failed: 0, errors: ['Supabase non disponible'] };
@@ -103,12 +109,13 @@ class SyncService {
         if (change.operation === 'DELETE') {
           await this.deleteFromRemote(change.table, change.recordId);
         } else {
-          const record = JSON.parse(change.data);
+          const record = this.getCurrentRecordForPush(change.table, change.recordId, change.data);
           await this.upsertToRemote(change.table, record);
         }
         pushed++;
         pushedIds.push(change.changeId);
       } catch (err: any) {
+        syncEngine.markChangeFailed(change.changeId);
         failed++;
         errors.push(`${change.table}/${change.recordId}: ${err.message}`);
       }
@@ -121,6 +128,24 @@ class SyncService {
     return { pushed, failed, errors };
   }
 
+  // Relit l'état courant de la ligne avant push (le changelog peut référencer
+  // un snapshot partiel). Si la ligne n'existe plus localement (supprimée entre
+  // le log et le push), on retombe sur les données journalisées.
+  getCurrentRecordForPush(tableName: string, recordId: string, fallbackData: string): Record<string, unknown> {
+    try {
+      const row = db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(recordId) as Record<string, unknown> | undefined;
+      if (row) return row;
+    } catch {
+      // table inconnue : on retombe sur le payload journalisé
+    }
+    try {
+      const parsed = JSON.parse(fallbackData);
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
   async syncDown(tableName?: string): Promise<{ pulled: number; errors: string[] }> {
     if (!await this.checkConnectivity()) {
       return { pulled: 0, errors: ['Supabase non disponible'] };
@@ -131,46 +156,51 @@ class SyncService {
       : TABLE_MAPPINGS;
 
     let pulled = 0;
-    let deleted = 0;
     const errors: string[] = [];
 
     for (const table of tables) {
       try {
         const lastSync = SyncQueue.getLastSyncTime(table.sqliteName);
         const since = lastSync || new Date(0).toISOString();
-        // Tables sans updated_at en PG (RBAC/audit) : on utilise created_at comme
-        // fallback. Cela capte les nouveaux enregistrements; les UPDATEs sont
-        // rares sur ces tables et seront alignés par un fullPull si besoin.
-        const fetcher = TABLES_WITHOUT_UPDATED_AT.has(table.sqliteName)
+        // Tables sans updated_at en PG (RBAC/audit) : on utilise created_at.
+        const usesCreatedAt = TABLES_WITHOUT_UPDATED_AT.has(table.sqliteName);
+        const fetcher = usesCreatedAt
           ? getChangesSinceByCreatedAt
           : getChangesSince;
 
-        let offset = 0;
-        let hasMore = true;
-
+        // Pagination par curseur keyset (updated_at|created_at, id) : ne saute
+        // JAMAIS de records, même avec des horodatages identiques (Phase 2).
+        let cursor: PullCursor | null = null;
+        let watermark: string | null = null;
         let tablePulled = 0;
         let tableError = false;
 
-        while (hasMore) {
-          const { data, error } = await fetcher(table.pgName, since, 100, offset);
+        while (true) {
+          const { data, error } = await fetcher(table.pgName, since, 100, cursor ?? undefined);
           if (error) {
             errors.push(`${table.sqliteName}: ${error.message}`);
             tableError = true;
             break;
           }
           if (!data || data.length === 0) {
-            hasMore = false;
-          } else {
-            this.upsertBatchToLocal(table.sqliteName, data);
-            pulled += data.length;
-            tablePulled += data.length;
-            offset += data.length;
-            if (data.length < 100) hasMore = false;
+            break;
           }
-        }
 
-        if (!tableError && tablePulled > 0) {
-          SyncQueue.updateLastSyncTime(table.sqliteName);
+          const maxTs = this.computeMaxTimestamp(data, usesCreatedAt);
+          if (maxTs && (!watermark || maxTs > watermark)) watermark = maxTs;
+
+          this.upsertBatchToLocal(table.sqliteName, data, watermark ?? undefined);
+          tablePulled += data.length;
+          pulled += data.length;
+
+          if (data.length < 100) {
+            break;
+          }
+          const last = data[data.length - 1];
+          cursor = {
+            updatedAt: String(usesCreatedAt ? last.created_at : last.updated_at),
+            id: String(last.id),
+          };
         }
       } catch (err: any) {
         errors.push(`${table.sqliteName}: ${err.message}`);
@@ -182,6 +212,15 @@ class SyncService {
     }
 
     return { pulled, errors };
+  }
+
+  private computeMaxTimestamp(records: any[], usesCreatedAt: boolean): string | null {
+    let max: string | null = null;
+    for (const r of records) {
+      const ts = usesCreatedAt ? r?.created_at : r?.updated_at;
+      if (typeof ts === 'string' && (!max || ts > max)) max = ts;
+    }
+    return max;
   }
 
   async fullSync(direction: SyncDirection = 'both'): Promise<SyncResult> {
@@ -308,7 +347,7 @@ class SyncService {
     if (error) throw new Error(error.message);
   }
 
-  private upsertBatchToLocal(tableName: string, records: any[]) {
+  private upsertBatchToLocal(tableName: string, records: any[], watermark?: string) {
     if (records.length === 0) return;
 
     // Enregistrer les mappings UUID <-> ID local pour permettre la résolution des FK.
@@ -364,47 +403,105 @@ class SyncService {
         });
         stmt.run(...values);
       }
+
+      // Watermark avancé dans la MÊME transaction que les upserts : si le
+      // process crashe entre les deux, le pull reprend de l'ancien watermark
+      // (idempotent, aucun record perdu).
+      if (watermark) {
+        SyncQueue.updateLastSyncTime(tableName, watermark);
+      }
     });
 
     transaction();
   }
 
-  startBackgroundSync(intervalMs: number = 300000) {
-    if (this.intervalId) return;
-    console.log(`[SYNC] Sync automatique activée (intervalle: ${intervalMs / 1000}s)`);
+  // Réconciliation locale <-> Supabase (Phase 2, correction M3) : détecte les
+  // écarts de comptage par table et répare les lignes "fantômes" locales
+  // (supprimées en dur côté PG) ainsi que les lignes PG jamais pullées.
+  // Sûre car jamais exécutée sur une table ayant des changements locaux en
+  // attente (hasPendingChangesForTable).
+  async reconcileLocalWithRemote(): Promise<{ checked: number; repaired: number; errors: string[] }> {
+    let checked = 0;
+    let repaired = 0;
+    const errors: string[] = [];
 
-    this.intervalId = setInterval(async () => {
-      if (this.isRunning) return;
-      this.isRunning = true;
+    for (const mapping of TABLE_MAPPINGS) {
+      // Tables sans legacy_id (clé naturelle) : non réconciliables simplement.
+      if (NO_LEGACY_ID_TABLES.has(mapping.sqliteName)) continue;
+      // Ne jamais réconcilier une table avec des changements locaux non poussés.
+      if (syncEngine.hasPendingChangesForTable(mapping.sqliteName)) continue;
+
       try {
-        const queueCount = SyncQueue.getPendingCount();
-        if (queueCount > 0) {
-          const result = await this.syncUp();
-          if (result.pushed > 0 || result.failed > 0) {
-            console.log(`[SYNC] syncUp: ${result.pushed} pushed, ${result.failed} failed`);
+        checked++;
+        const { count: pgCount, error: countError } = await countRemoteRows(mapping.pgName);
+        if (countError || pgCount === null) {
+          errors.push(`${mapping.sqliteName}: ${countError?.message || 'count indisponible'}`);
+          continue;
+        }
+
+        const localCount = this.countLocalRows(mapping.sqliteName);
+        if (pgCount === localCount) continue;
+
+        if (localCount > pgCount) {
+          // Lignes locales absentes de PG (supprimées en dur côté PG) -> purge
+          const removed = await this.pruneLocalRowsMissingFromRemote(mapping);
+          if (removed > 0) {
+            repaired++;
+            console.log(`[SYNC RECONCILE] ${mapping.sqliteName}: ${removed} lignes fantômes supprimées localement`);
           }
         }
 
-        const changelogResult = await this.syncUpFromChangelog();
-        if (changelogResult.pushed > 0 || changelogResult.failed > 0) {
-          console.log(`[SYNC] Changelog sync: ${changelogResult.pushed} pushed, ${changelogResult.failed} failed`);
-        }
-
-        await this.syncDown();
+        // Repull complet de la table (récupère aussi les lignes PG jamais vues)
+        await this.syncDown(mapping.sqliteName);
       } catch (err: any) {
-        console.error('[SYNC] Erreur sync automatique:', err.message);
-      } finally {
-        this.isRunning = false;
+        errors.push(`${mapping.sqliteName}: ${err.message}`);
       }
-    }, intervalMs);
+    }
+
+    if (repaired > 0) {
+      console.log(`[SYNC RECONCILE] ${checked} tables vérifiées, ${repaired} réparées`);
+    }
+    return { checked, repaired, errors };
+  }
+
+  private countLocalRows(tableName: string): number {
+    const row = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get() as { count: number };
+    return row.count;
+  }
+
+  private async pruneLocalRowsMissingFromRemote(mapping: { sqliteName: string; pgName: string }): Promise<number> {
+    const { ids: pgLegacyIds, error } = await fetchAllLegacyIds(mapping.pgName);
+    if (error) throw new Error(error.message);
+
+    const pgIdSet = new Set(pgLegacyIds);
+    const localRows = db.prepare(`SELECT id FROM ${mapping.sqliteName}`).all() as { id: string }[];
+
+    let removed = 0;
+    const transaction = db.transaction(() => {
+      for (const r of localRows) {
+        if (!pgIdSet.has(r.id)) {
+          db.prepare(`DELETE FROM ${mapping.sqliteName} WHERE id = ?`).run(r.id);
+          // Tombstone local pour que le pull client supprime aussi la ligne
+          // fantôme ; PG n'a déjà plus la ligne (pushed=1 -> purgable).
+          db.prepare(`INSERT OR REPLACE INTO sync_deletions (id, table_name, record_id, deleted_at, company_id, pushed_to_supabase) VALUES (?, ?, ?, ?, ?, 1)`)
+            .run(`del-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, mapping.sqliteName, r.id, new Date().toISOString(), null);
+          removed++;
+        }
+      }
+    });
+    transaction();
+    return removed;
+  }
+
+  startBackgroundSync(intervalMs: number = 300000) {
+    // SUPPRIMÉ en Phase 1 : un seul planificateur (SupabaseWorker) pilote la
+    // synchronisation pour éviter le double-push. Cette méthode est conservée
+    // comme no-op pour ne pas casser d'éventuels appelants.
+    console.warn('[SYNC] startBackgroundSync est désactivée (pipeline unique : SupabaseWorker)');
   }
 
   stopBackgroundSync() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-      console.log('[SYNC] Sync automatique arrêtée');
-    }
+    // No-op depuis Phase 1 (voir startBackgroundSync).
   }
 
   getStatus() {

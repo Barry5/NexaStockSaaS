@@ -1,4 +1,4 @@
-﻿﻿import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
 
 let adminClient: any = null;
 let anonClient: any = null;
@@ -126,37 +126,97 @@ export async function batchDelete(
   return { success, errors };
 }
 
+// Curseur de pagination keyset : (updated_at, id) du DERNIER record de la page
+// précédente. Évite de sauter des records quand plusieurs lignes partagent le
+// même updated_at (trigger NOW() par batch d'upsert) — cf. Phase 2 du plan.
+export interface PullCursor {
+  updatedAt: string;
+  id: string;
+}
+
 export async function getChangesSince(
   table: string,
   since: string,
   limit: number = 100,
-  offset: number = 0,
+  cursor?: PullCursor,
 ): Promise<{ data: any[] | null; error: any }> {
   const client = getAdminClient();
-  return client
+  let query = client
     .from(table)
     .select('*')
-    .gte('updated_at', since)
+    .limit(limit)
     .order('updated_at', { ascending: true })
-    .range(offset, offset + limit - 1);
+    .order('id', { ascending: true });
+
+  if (cursor && cursor.updatedAt && cursor.id) {
+    // Page suivante : (updated_at > cursor) OR (updated_at = cursor AND id > cursorId)
+    query = query.or(`and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id}),updated_at.gt.${cursor.updatedAt}`);
+  } else {
+    query = query.gt('updated_at', since);
+  }
+
+  return query;
 }
 
 // Variante pour les tables dont le schéma PG n'a pas de colonne updated_at
-// (module_definitions, tenant_modules, permissions, role_permissions, user_roles,
-//  audit_logs, invoice_audit_log, commission_audit, delivery_note_audit).
-// On utilise created_at comme horodatage de modification. Cela capture les
-// nouveaux enregistrements mais pas les UPDATEs (ces tables sont quasi-statiques).
+// (RBAC/audit) : curseur sur (created_at, id). Capture les nouveaux
+// enregistrements; les UPDATEs de ces tables quasi-statiques sont alignés par
+// fullPull ou réconciliation.
 export async function getChangesSinceByCreatedAt(
   table: string,
   since: string,
   limit: number = 100,
-  offset: number = 0,
+  cursor?: PullCursor,
 ): Promise<{ data: any[] | null; error: any }> {
   const client = getAdminClient();
-  return client
+  let query = client
     .from(table)
     .select('*')
-    .gte('created_at', since)
-    .order('id', { ascending: true })
-    .range(offset, offset + limit - 1);
+    .limit(limit)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
+
+  if (cursor && cursor.updatedAt && cursor.id) {
+    query = query.or(`and(created_at.eq.${cursor.updatedAt},id.gt.${cursor.id}),created_at.gt.${cursor.updatedAt}`);
+  } else {
+    query = query.gt('created_at', since);
+  }
+
+  return query;
+}
+
+export async function countRemoteRows(
+  table: string,
+): Promise<{ count: number | null; error: any }> {
+  const client = getAdminClient();
+  const { count, error } = await client
+    .from(table)
+    .select('id', { count: 'exact', head: true });
+  return { count, error };
+}
+
+export async function fetchAllLegacyIds(
+  table: string,
+  pageSize: number = 1000,
+): Promise<{ ids: string[]; error: any }> {
+  const client = getAdminClient();
+  const ids: string[] = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await client
+      .from(table)
+      .select('legacy_id')
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) return { ids, error };
+    if (!data || data.length === 0) break;
+    for (const r of data) {
+      if (r.legacy_id) ids.push(r.legacy_id);
+    }
+    offset += data.length;
+    if (data.length < pageSize) break;
+  }
+
+  return { ids, error: null };
 }

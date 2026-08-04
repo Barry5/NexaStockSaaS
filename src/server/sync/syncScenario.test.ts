@@ -57,22 +57,26 @@ describe('Analyse de scénarios de synchronisation', () => {
       features: [], limits: {}, color: 'red', displayOrder: 99, active: true,
     });
 
-    // Vider la file de synchro pour isoler notre test
-    db.prepare('DELETE FROM sync_queue').run();
+    // Laisser le push immédiat du CREATE (fire-and-forget) se terminer
+    await new Promise(r => setTimeout(r, 100));
+
+    // Vider le changelog de synchro pour isoler notre test
+    db.prepare('DELETE FROM sync_changelog').run();
     mockBatchUpsert.mockClear();
 
     // 2. Action: Mettre à jour le prix du forfait
     pricingPlanService.update(plan.id, { price: 99.99 });
 
-    // 3. Analyse: Vérifier que l'action est bien dans la file d'attente
-    const queueItem = db.prepare(`SELECT * FROM sync_queue WHERE record_id = ?`).get(plan.id);
-    expect(queueItem).toBeDefined();
-    expect(queueItem.operation).toBe('UPDATE');
+    // Le service déclenche un push immédiat (fire-and-forget, Phase 1) :
+    // attendre qu'il se termine puis vérifier ce qui est parti.
+    await new Promise(r => setTimeout(r, 100));
 
-    // 4. Action: Lancer la synchronisation montante
-    await syncService.syncUp();
+    // 3. Analyse: Vérifier que l'action est bien journalisée dans le changelog
+    const changeItem = db.prepare(`SELECT * FROM sync_changelog WHERE record_id = ?`).get(plan.id);
+    expect(changeItem).toBeDefined();
+    expect(changeItem.operation).toBe('UPDATE');
 
-    // 5. Vérification: Analyser les données envoyées à Supabase
+    // 4. Vérification: Analyser les données envoyées à Supabase par le push immédiat
     expect(mockBatchUpsert).toHaveBeenCalledOnce();
     const [table, records] = mockBatchUpsert.mock.calls[0];
     expect(table).toBe('pricing_plans');
@@ -88,8 +92,8 @@ describe('Analyse de scénarios de synchronisation', () => {
     const customer = customerService.create({ name: 'Client Test Sync' }, tenantId);
     const product = productService.create({ name: 'Produit Test Sync', sku: 'SYNC-001', category: 'Test', buyPrice: 5, sellPrice: 10, quantity: 100 }, tenantId);
 
-    // Vider la file et les mocks
-    db.prepare('DELETE FROM sync_queue').run();
+    // Vider le changelog et les mocks
+    db.prepare('DELETE FROM sync_changelog').run();
     mockBatchUpsert.mockClear();
 
     // 2. Action: Créer une vente complexe
@@ -104,11 +108,13 @@ describe('Analyse de scénarios de synchronisation', () => {
     const existingUser = db.prepare('SELECT id, name FROM users WHERE role = ? LIMIT 1').get('superadmin') as any;
     const sale = saleService.create(saleInput, tenantId, existingUser.id, existingUser.name);
 
-    // 3. Action: Lancer la synchronisation
-    await syncService.syncUp();
+    // 3. Action: Laisser le push immédiat (fire-and-forget, Phase 1) se terminer
+    await new Promise(r => setTimeout(r, 300));
 
-    // 4. Analyse: Vérifier les appels à Supabase
-    expect(mockBatchUpsert).toHaveBeenCalledTimes(3); // Un appel pour 'sales', un pour 'sale_items', un pour 'audit_logs'
+    // 4. Analyse: Vérifier les appels à Supabase (toutes tables confondues)
+    expect(mockBatchUpsert.mock.calls.some(call => call[0] === 'sales')).toBe(true);
+    expect(mockBatchUpsert.mock.calls.some(call => call[0] === 'sale_items')).toBe(true);
+    expect(mockBatchUpsert.mock.calls.some(call => call[0] === 'audit_logs')).toBe(true);
 
     const saleCall = mockBatchUpsert.mock.calls.find(call => call[0] === 'sales');
     const saleItemCall = mockBatchUpsert.mock.calls.find(call => call[0] === 'sale_items');
@@ -123,5 +129,9 @@ describe('Analyse de scénarios de synchronisation', () => {
     expect(pgSale.customer_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     expect(pgSaleItem.sale_id).toBe(pgSale.id); // La clé de la vente doit correspondre
     expect(pgSaleItem.product_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+
+    // Tout le changelog de la vente doit être marqué poussé (plus rien en attente)
+    const pending = db.prepare(`SELECT COUNT(*) as c FROM sync_changelog WHERE table_name IN ('sales', 'sale_items', 'audit_logs') AND pushed_to_supabase = 0`).get() as { c: number };
+    expect(pending.c).toBe(0);
   });
 });

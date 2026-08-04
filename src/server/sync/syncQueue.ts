@@ -43,13 +43,26 @@ export function enqueue(
   return id;
 }
 
+// File d'attente LEGACY (pré-déploiement pipeline unique) : conservée pour
+// drainer les items en attente des anciennes versions. Le pipeline actif
+// (Phase 1) passe exclusivement par sync_changelog (syncEngine.logChange).
 export function dequeue(batchSize: number = 50): SyncQueueItem[] {
-  return db.prepare(`
+  const items = db.prepare(`
     SELECT * FROM sync_queue
     WHERE status = 'pending' AND retry_count < max_retries
     ORDER BY ${tablePriorityCase()}, created_at ASC
     LIMIT ?
   `).all(batchSize) as SyncQueueItem[];
+
+  // Réservation atomique : marque les items 'processing' avant tout traitement
+  // pour éviter qu'un second worker ne reprenne les mêmes.
+  if (items.length > 0) {
+    const ids = items.map(i => i.id);
+    const placeholders = ids.map(() => '?').join(', ');
+    db.prepare(`UPDATE sync_queue SET status = 'processing' WHERE id IN (${placeholders}) AND status = 'pending'`).run(...ids);
+  }
+
+  return items;
 }
 
 export function markProcessing(id: string) {
@@ -95,20 +108,24 @@ export function getLastSyncTime(tableName: string): string | null {
   return row?.last_sync_at || null;
 }
 
-export function updateLastSyncTime(tableName: string, deviceId?: string, companyId?: string) {
+// Watermark de pull : le paramètre `watermark` (max updated_at/created_at des
+// records réellement récupérés) prime sur l'horodatage courant, et le watermark
+// n'est JAMAIS régressé (garde `last_sync_at < ?`).
+export function updateLastSyncTime(tableName: string, watermark?: string, deviceId?: string, companyId?: string) {
+  const value = watermark || new Date().toISOString();
   const now = new Date().toISOString();
-  const existing = db.prepare(`SELECT id FROM sync_tracking WHERE table_name = ?`).get(tableName) as { id: string } | undefined;
+  const existing = db.prepare(`SELECT id, last_sync_at FROM sync_tracking WHERE table_name = ?`).get(tableName) as { id: string; last_sync_at: string | null } | undefined;
 
   if (existing) {
     db.prepare(`
-      UPDATE sync_tracking SET last_sync_at = ?, updated_at = ? WHERE table_name = ?
-    `).run(now, now, tableName);
+      UPDATE sync_tracking SET last_sync_at = ?, updated_at = ? WHERE table_name = ? AND (last_sync_at IS NULL OR last_sync_at < ?)
+    `).run(value, now, tableName, value);
   } else {
     const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     db.prepare(`
       INSERT INTO sync_tracking (id, table_name, last_sync_at, last_sync_version, device_id, company_id, created_at, updated_at)
       VALUES (?, ?, ?, 0, ?, ?, ?, ?)
-    `).run(id, tableName, now, deviceId || null, companyId || null, now, now);
+    `).run(id, tableName, value, deviceId || null, companyId || null, now, now);
   }
 }
 
