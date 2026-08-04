@@ -101,6 +101,19 @@ describe('transformToPostgres : exclusion et ommission conformes au schéma PG',
     expect(getConflictColumn('plan_modules')).toBe('id');
   });
 
+  it('utilise la colonne id comme clé de conflit par défaut pour les tables régulières', () => {
+    expect(getConflictColumn('pricing_plans')).toBe('id');
+    expect(getConflictColumn('tenants')).toBe('id');
+  });
+
+  it('getDeleteCriteria utilise id pour les UUID et legacy_id pour les anciens IDs', () => {
+    expect(getDeleteCriteria('pricing_plans', 'plan-free')).toEqual({ column: 'legacy_id', value: 'plan-free' });
+    expect(getDeleteCriteria('pricing_plans', '9a7b8c4d-1234-4d5e-9f8a-0b1c2d3e4f5a')).toEqual({
+      column: 'id',
+      value: '9a7b8c4d-1234-4d5e-9f8a-0b1c2d3e4f5a',
+    });
+  });
+
   it('getDeleteCriteria pour plan_modules cible la colonne id (UUID mappé)', () => {
     const crit = getDeleteCriteria('plan_modules', 'pm-999');
     expect(crit.column).toBe('id');

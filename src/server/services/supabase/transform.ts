@@ -36,8 +36,12 @@ export function getConflictColumn(tableName: string): string {
     case 'gdrive_tokens': return 'tenant_id';
     case 'tenant_modules': return 'id';
     case 'plan_modules': return 'id';
-    default: return 'legacy_id';
+    default: return 'id';
   }
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 export function getDeleteCriteria(tableName: string, recordId: string): { column: string; value: string } {
@@ -47,7 +51,9 @@ export function getDeleteCriteria(tableName: string, recordId: string): { column
     case 'gdrive_tokens': return { column: 'tenant_id', value: resolveFkValue(recordId) };
     case 'tenant_modules': return { column: 'id', value: getOrCreateUuid(recordId) };
     case 'plan_modules': return { column: 'id', value: getOrCreateUuid(recordId) };
-    default: return { column: 'legacy_id', value: recordId };
+    default:
+      if (isUuid(recordId)) return { column: 'id', value: recordId };
+      return { column: 'legacy_id', value: recordId };
   }
 }
 
