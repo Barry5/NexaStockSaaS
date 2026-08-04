@@ -106,6 +106,33 @@ describe('transformToPostgres : exclusion et ommission conformes au schéma PG',
     expect(getConflictColumn('tenants')).toBe('id');
   });
 
+  it('transforme pricing_plans avec currency et JSON correctement pour Supabase', () => {
+    const pg = transform('pricing_plans', {
+      id: 'plan-standard',
+      name: 'Standard',
+      description: 'Plan standard',
+      price: 29.99,
+      currency: 'USD',
+      durationDays: 30,
+      features: JSON.stringify(['support', 'analytics']),
+      limits: JSON.stringify({ users: 10 }),
+      version: 7,
+      createdAt: '2026-07-31T00:00:00Z',
+      updatedAt: '2026-07-31T00:00:00Z',
+    });
+
+    expect(pg.price).toBe(29.99);
+    expect(pg.currency).toBe('USD');
+    expect(pg.features).toEqual(['support', 'analytics']);
+    expect(pg.limits).toEqual({ users: 10 });
+    expect(pg.legacy_id).toBe('plan-standard');
+    expect(pg.id).toBeDefined();
+  });
+
+  it('getDeleteCriteria pour global_saas_settings cible la colonne id', () => {
+    expect(getDeleteCriteria('global_saas_settings', '1')).toEqual({ column: 'id', value: '1' });
+  });
+
   it('getDeleteCriteria utilise id pour les UUID et legacy_id pour les anciens IDs', () => {
     expect(getDeleteCriteria('pricing_plans', 'plan-free')).toEqual({ column: 'legacy_id', value: 'plan-free' });
     expect(getDeleteCriteria('pricing_plans', '9a7b8c4d-1234-4d5e-9f8a-0b1c2d3e4f5a')).toEqual({

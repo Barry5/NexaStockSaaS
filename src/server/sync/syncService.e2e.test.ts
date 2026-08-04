@@ -68,6 +68,28 @@ describe('syncService E2E : coherence local <-> Supabase', () => {
     expect(records[0].version).toBeUndefined();
   });
 
+  it('fullPush propage les modifications de pricing_plans avec currency et legacy_id', async () => {
+    mockBatchUpsert.mockClear();
+    const now = new Date().toISOString();
+
+    db.prepare(`INSERT INTO pricing_plans (id, name, description, price, currency, durationDays, features, limits, color, displayOrder, active, createdAt, updatedAt, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run('plan-e2e', 'Pro', 'Pro plan', 49.99, 'USD', 30, JSON.stringify(['support']), JSON.stringify({ users: 20 }), '#00AEEF', 2, 1, now, now, 1);
+
+    const result = await syncService.fullPush();
+
+    expect(result.pushed).toBeGreaterThanOrEqual(1);
+    expect(result.failed).toBe(0);
+
+    const pricingCall = mockBatchUpsert.mock.calls.find(([, records]) => records.some((record: any) => record.legacy_id === 'plan-e2e'));
+    expect(pricingCall).toBeDefined();
+    const [, records] = pricingCall as [string, any[]];
+    const pushedRecord = records.find((record: any) => record.legacy_id === 'plan-e2e');
+    expect(pushedRecord).toBeDefined();
+    expect(pushedRecord.currency).toBe('USD');
+    expect(pushedRecord.legacy_id).toBe('plan-e2e');
+    expect(pushedRecord.version).toBeUndefined();
+  });
+
   it('propage un DELETE vers Supabase meme si la ligne n\'existe plus localement (fix #1 dans pushChanges)', async () => {
     mockBatchUpsert.mockClear();
     mockDelete.mockClear();
