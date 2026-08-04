@@ -65,6 +65,77 @@ export interface PullResult {
   timestamp: string;
 }
 
+export interface SyncQueueTableSummary {
+  table_name: string;
+  pending: number;
+  processing: number;
+  failed: number;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+export interface PendingChangesByTable {
+  table_name: string;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+export interface PendingDeletionsByTable {
+  table_name: string;
+  count: number;
+}
+
+export interface PendingChangesSummary {
+  changelogCount: number;
+  changelogByTable: PendingChangesByTable[];
+  deletionCount: number;
+  deletionsByTable: PendingDeletionsByTable[];
+}
+
+export interface SyncOverview {
+  service: {
+    online: boolean;
+    pendingCount: number;
+    failedCount: number;
+    isRunning: boolean;
+    isConfigured: boolean;
+  };
+  worker: {
+    running: boolean;
+    online: boolean;
+    cycleCount: number;
+    lastRunAt: string | null;
+    lastResult: string;
+    uptime: number;
+    pendingCount: number;
+    failedCount: number;
+  };
+  queueSummary: {
+    total: number;
+    pending: number;
+    processing: number;
+    failed: number;
+    completed: number;
+    oldestPendingAt: string | null;
+    oldestFailedAt: string | null;
+    perTable: SyncQueueTableSummary[];
+  };
+  pendingChanges: PendingChangesSummary;
+  lastSyncTimestamps: Array<{ table_name: string; last_sync_at: string | null }>;
+}
+
+export async function fetchSyncOverview(): Promise<SyncOverview> {
+  const headers = getAuthHeaders();
+  const res = await fetch('/api/sync/overview', { headers });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || `Sync overview request failed: ${res.status}`);
+  }
+  return res.json() as Promise<SyncOverview>;
+}
+
 export async function pushChanges(changes: SyncChange[]): Promise<PushResult> {
   const headers = getAuthHeaders();
   const res = await fetch('/api/sync/push', {

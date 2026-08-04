@@ -18,8 +18,10 @@ import {
   ShieldAlert,
   Eye,
   EyeOff,
+  CloudLightning,
 } from 'lucide-react';
 import type { Tenant, User, SubscriptionPlan, UserRole, AuditLog, SubscriptionPayment, PricingPlan } from '../types';
+import type { SyncOverview } from '../types/sync';
 import { ConfirmDialog } from './shared/ConfirmDialog';
 import { useDB, useApp } from '../context';
 import { Modal } from './shared/Modal';
@@ -31,6 +33,8 @@ import AdminPlans from './admin/AdminPlans';
 import AdminModules from './admin/AdminModules';
 import AdminSupport from './admin/AdminSupport';
 import AdminLogs from './admin/AdminLogs';
+import AdminSyncOverview from './admin/AdminSyncOverview';
+import { fetchSyncOverview } from '../api/sync';
 
 function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const token = localStorage.getItem('nexastock_token');
@@ -43,10 +47,13 @@ function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
 export default function SaaSAdmin() {
   const { db, handleUpdateDb, addNotification } = useDB();
   const { activeUserId, saasSubTab: propActiveSubTab, setSaasSubTab: propSetActiveSubTab } = useApp();
-  const [localActiveSubTab, setLocalActiveSubTab] = useState<'stats' | 'tenants' | 'users' | 'invoices' | 'logs' | 'support' | 'plans' | 'modules'>('stats');
+  const [localActiveSubTab, setLocalActiveSubTab] = useState<'stats' | 'tenants' | 'users' | 'invoices' | 'logs' | 'support' | 'plans' | 'modules' | 'sync'>('stats');
   
   const activeSubTab = propActiveSubTab !== undefined ? propActiveSubTab : localActiveSubTab;
   const setActiveSubTab = propSetActiveSubTab !== undefined ? propSetActiveSubTab : setLocalActiveSubTab;
+  const [syncOverview, setSyncOverview] = useState<SyncOverview | null>(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const [passwordModalTargetId, setPasswordModalTargetId] = useState<string | null>(null);
   const [passwordModalValue, setPasswordModalValue] = useState('');
@@ -168,7 +175,26 @@ export default function SaaSAdmin() {
       handleUpdateDb({ ...db, tenants: data });
     }
   }, [apiCall, db, handleUpdateDb]);
-
+ 
+  const loadSyncOverview = useCallback(async () => {
+    setSyncLoading(true);
+    setSyncError(null);
+    try {
+      const overview = await fetchSyncOverview();
+      setSyncOverview(overview);
+    } catch (err: any) {
+      setSyncError(err?.message || 'Impossible de charger l’état de synchronisation.');
+    } finally {
+      setSyncLoading(false);
+    }
+  }, []);
+ 
+  React.useEffect(() => {
+    if (activeSubTab === 'sync') {
+      loadSyncOverview();
+    }
+  }, [activeSubTab, loadSyncOverview]);
+ 
   // Handle tenant status change (suspend, reactivate, block, unblock)
   const handleChangeStatus = async (tenantId: string, status: string) => {
     const data = await apiCall('PUT', `/api/saas/tenants/${tenantId}/status`, { status });
@@ -541,6 +567,14 @@ export default function SaaSAdmin() {
           <Layers className="w-3.5 h-3.5" /> Paramètres & Tarifs
         </button>
         <button
+          onClick={() => setActiveSubTab('sync')}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-lg transition ${
+            activeSubTab === 'sync' ? 'bg-red-500 text-white shadow-md' : 'text-gray-400 hover:text-white hover:bg-gray-850'
+          }`}
+        >
+          <CloudLightning className="w-3.5 h-3.5" /> Supervision Sync
+        </button>
+        <button
           onClick={() => setActiveSubTab('modules')}
           className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-lg transition ${
             activeSubTab === 'modules' ? 'bg-red-500 text-white shadow-md' : 'text-gray-400 hover:text-white hover:bg-gray-850'
@@ -676,7 +710,17 @@ export default function SaaSAdmin() {
             />
           )}
 
-          {/* TAB 6: MODULES */}
+          {/* TAB 6: SYNC OVERVIEW DASHBOARD */}
+          {activeSubTab === 'sync' && (
+            <AdminSyncOverview
+              overview={syncOverview}
+              loading={syncLoading}
+              error={syncError}
+              onRefresh={loadSyncOverview}
+            />
+          )}
+ 
+          {/* TAB 7: MODULES */}
           {activeSubTab === 'modules' && (
             <AdminModules />
           )}

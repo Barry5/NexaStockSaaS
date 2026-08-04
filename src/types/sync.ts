@@ -51,6 +51,65 @@ export interface SyncStatusInfo {
   isConfigured: boolean;
 }
 
+export interface WorkerStatusInfo {
+  running: boolean;
+  online: boolean;
+  cycleCount: number;
+  lastRunAt: string | null;
+  lastResult: string;
+  uptime: number;
+  pendingCount: number;
+  failedCount: number;
+}
+
+export interface SyncQueueTableSummary {
+  table_name: string;
+  pending: number;
+  processing: number;
+  failed: number;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+export interface SyncQueueSummary {
+  total: number;
+  pending: number;
+  processing: number;
+  failed: number;
+  completed: number;
+  oldestPendingAt: string | null;
+  oldestFailedAt: string | null;
+  perTable: SyncQueueTableSummary[];
+}
+
+export interface PendingChangesByTable {
+  table_name: string;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+export interface PendingDeletionsByTable {
+  table_name: string;
+  count: number;
+}
+
+export interface PendingChangesSummary {
+  changelogCount: number;
+  changelogByTable: PendingChangesByTable[];
+  deletionCount: number;
+  deletionsByTable: PendingDeletionsByTable[];
+}
+
+export interface SyncOverview {
+  service: SyncStatusInfo;
+  worker: WorkerStatusInfo;
+  queueSummary: SyncQueueSummary;
+  pendingChanges: PendingChangesSummary;
+  lastSyncTimestamps: Array<{ table_name: string; last_sync_at: string | null }>;
+}
+
 export interface ConflictInfo {
   recordId: string;
   tableName: string;
