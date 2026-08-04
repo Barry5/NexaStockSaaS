@@ -109,13 +109,41 @@ describe('syncService E2E : coherence local <-> Supabase', () => {
   it('cleanupPushedRecords supprime le changelog deja pousse vers PG', async () => {
     db.prepare(`INSERT INTO sync_changelog (id, table_name, record_id, operation, new_values, old_version, new_version, created_at, pushed_to_supabase) VALUES (?,?,?,?,?,?,?,?,?)`)
       .run('chg-test', 'products', 'p-x', 'CREATE', '{}', 0, 1, new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), 1);
-
+ 
     const removed = syncEngine.cleanupPushedRecords();
-
+ 
     expect(removed).toBe(1);
     expect(db.prepare(`SELECT COUNT(*) as c FROM sync_changelog WHERE id = ?`).get('chg-test').c).toBe(0);
   });
-
+ 
+  it('getSummary retourne un sommaire des operations de synchronisation par table', () => {
+    syncQueue.enqueue('products', 'p-summary-1', 'CREATE', { id: 'p-summary-1', name: 'Summary Product' });
+    syncQueue.enqueue('products', 'p-summary-2', 'UPDATE', { id: 'p-summary-2', name: 'Updated Product' });
+    syncQueue.enqueue('customers', 'c-summary-1', 'DELETE', { id: 'c-summary-1' });
+ 
+    const summary = syncQueue.getSummary();
+ 
+    expect(summary.total).toBeGreaterThanOrEqual(3);
+    expect(summary.pending).toBeGreaterThanOrEqual(3);
+    expect(summary.perTable.some(t => t.table_name === 'products')).toBe(true);
+    const productSummary = summary.perTable.find(t => t.table_name === 'products');
+    expect(productSummary?.create).toBeGreaterThanOrEqual(1);
+    expect(productSummary?.update).toBeGreaterThanOrEqual(1);
+  });
+ 
+  it('getPendingChangesSummary retourne les changements et suppressions non pushes', () => {
+    db.prepare(`INSERT INTO sync_changelog (id, table_name, record_id, operation, new_values, old_version, new_version, created_at, pushed_to_supabase) VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run('chg-summary', 'products', 'p-sum-1', 'UPDATE', '{}', 1, 2, new Date().toISOString(), 0);
+    db.prepare(`INSERT INTO sync_deletions (id, table_name, record_id, deleted_at, pushed_to_supabase) VALUES (?,?,?,?,?)`)
+      .run('del-summary', 'customers', 'c-sum-1', new Date().toISOString(), 0);
+ 
+    const pending = syncEngine.getPendingChangesSummary();
+    expect(pending.changelogCount).toBeGreaterThanOrEqual(1);
+    expect(pending.deletionCount).toBeGreaterThanOrEqual(1);
+    expect(pending.changelogByTable.some(t => t.table_name === 'products')).toBe(true);
+    expect(pending.deletionsByTable.some(t => t.table_name === 'customers')).toBe(true);
+  });
+ 
   it('plan_modules est dans TABLES_WITHOUT_UPDATED_AT (PG n\'a pas updated_at -> fallback created_at)', () => {
     expect(tablesWithoutUpdatedAt.has('plan_modules')).toBe(true);
     expect(tablesWithoutUpdatedAt.has('tenant_modules')).toBe(true);

@@ -127,3 +127,69 @@ export function cleanOldSyncRecords(daysOld: number = 30) {
 export function loadLastSyncTimestamps(): { table_name: string; last_sync_at: string | null }[] {
   return db.prepare(`SELECT table_name, last_sync_at FROM sync_tracking`).all() as { table_name: string; last_sync_at: string | null }[];
 }
+
+export interface SyncQueueTableSummary {
+  table_name: string;
+  pending: number;
+  processing: number;
+  failed: number;
+  create: number;
+  update: number;
+  delete: number;
+}
+
+export interface SyncQueueSummary {
+  total: number;
+  pending: number;
+  processing: number;
+  failed: number;
+  completed: number;
+  oldestPendingAt: string | null;
+  oldestFailedAt: string | null;
+  perTable: SyncQueueTableSummary[];
+}
+
+export function getSummary(): SyncQueueSummary {
+  const stats = db.prepare(
+    `SELECT status, operation, table_name, COUNT(*) as count
+     FROM sync_queue
+     GROUP BY status, operation, table_name`
+  ).all() as { status: string; operation: string; table_name: string; count: number }[];
+
+  const tableMap = new Map<string, SyncQueueTableSummary>();
+  let pending = 0; let processing = 0; let failed = 0; let completed = 0;
+  for (const row of stats) {
+    const summary = tableMap.get(row.table_name) || {
+      table_name: row.table_name,
+      pending: 0, processing: 0, failed: 0,
+      create: 0, update: 0, delete: 0,
+    };
+    if (row.status === 'pending') summary.pending += row.count;
+    if (row.status === 'processing') summary.processing += row.count;
+    if (row.status === 'failed') summary.failed += row.count;
+    if (row.status === 'completed') completed += row.count;
+    if (row.operation === 'CREATE') summary.create += row.count;
+    if (row.operation === 'UPDATE') summary.update += row.count;
+    if (row.operation === 'DELETE') summary.delete += row.count;
+    tableMap.set(row.table_name, summary);
+
+    if (row.status === 'pending') pending += row.count;
+    if (row.status === 'processing') processing += row.count;
+    if (row.status === 'failed') failed += row.count;
+  }
+
+  const total = pending + processing + failed + completed;
+  const oldestPendingAtRow = db.prepare(`SELECT created_at FROM sync_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`).get() as { created_at: string } | undefined;
+  const oldestFailedAtRow = db.prepare(`SELECT created_at FROM sync_queue WHERE status = 'failed' ORDER BY created_at ASC LIMIT 1`).get() as { created_at: string } | undefined;
+
+  return {
+    total,
+    pending,
+    processing,
+    failed,
+    completed,
+    oldestPendingAt: oldestPendingAtRow?.created_at || null,
+    oldestFailedAt: oldestFailedAtRow?.created_at || null,
+    perTable: Array.from(tableMap.values()).sort((a, b) => a.table_name.localeCompare(b.table_name)),
+  };
+}

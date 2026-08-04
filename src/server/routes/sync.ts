@@ -7,6 +7,7 @@ import { getAdminClient } from '../services/supabase/supabaseService.js';
 import { syncService } from '../sync/syncService.js';
 import { syncEngine } from '../sync/syncEngine.js';
 import { supabaseWorker } from '../sync/supabaseWorker.js';
+import * as SyncQueue from '../sync/syncQueue.js';
 import { SYNC_TABLES } from '../sync/syncTables.js';
 
 const router = Router();
@@ -331,6 +332,21 @@ router.get('/status', authenticateToken, requireRole(['superadmin']), (req, res)
   res.json({
     ...syncService.getStatus(),
     worker: supabaseWorker.getStatus(),
+  });
+});
+
+// GET /api/sync/overview: Detailed sync diagnostics for superadmin dashboard
+router.get('/overview', authenticateToken, requireRole(['superadmin']), (req, res) => {
+  const queueSummary = SyncQueue.getSummary();
+  const pendingChanges = syncEngine.getPendingChangesSummary();
+  const lastSyncTimestamps = SyncQueue.loadLastSyncTimestamps();
+
+  res.json({
+    service: syncService.getStatus(),
+    worker: supabaseWorker.getStatus(),
+    queueSummary,
+    pendingChanges,
+    lastSyncTimestamps,
   });
 });
 

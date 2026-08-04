@@ -246,6 +246,51 @@ export class SyncEngine {
     db.prepare(`UPDATE sync_changelog SET pushed_to_supabase = 1 WHERE id IN (${placeholders})`).run(...ids);
   }
 
+  getPendingChangesSummary(): {
+    changelogCount: number;
+    changelogByTable: Array<{ table_name: string; create: number; update: number; delete: number }>;
+    deletionCount: number;
+    deletionsByTable: Array<{ table_name: string; count: number }>;
+  } {
+    const changelogRows = db.prepare(`
+      SELECT table_name, operation, COUNT(*) as count
+      FROM sync_changelog
+      WHERE pushed_to_supabase = 0
+      GROUP BY table_name, operation
+    `).all() as { table_name: string; operation: string; count: number }[];
+
+    const changeMap = new Map<string, { table_name: string; create: number; update: number; delete: number }>();
+    let changelogCount = 0;
+    for (const row of changelogRows) {
+      const summary = changeMap.get(row.table_name) || { table_name: row.table_name, create: 0, update: 0, delete: 0 };
+      if (row.operation === 'CREATE') summary.create = row.count;
+      if (row.operation === 'UPDATE') summary.update = row.count;
+      if (row.operation === 'DELETE') summary.delete = row.count;
+      changeMap.set(row.table_name, summary);
+      changelogCount += row.count;
+    }
+
+    const deletionsRows = db.prepare(`
+      SELECT table_name, COUNT(*) as count
+      FROM sync_deletions
+      WHERE pushed_to_supabase = 0
+      GROUP BY table_name
+    `).all() as { table_name: string; count: number }[];
+
+    let deletionCount = 0;
+    const deletionsByTable = deletionsRows.map(r => {
+      deletionCount += r.count;
+      return { table_name: r.table_name, count: r.count };
+    });
+
+    return {
+      changelogCount,
+      changelogByTable: Array.from(changeMap.values()).sort((a, b) => a.table_name.localeCompare(b.table_name)),
+      deletionCount,
+      deletionsByTable: deletionsByTable.sort((a, b) => a.table_name.localeCompare(b.table_name)),
+    };
+  }
+
   // Nettoie les enregistrements de sync déjà poussés vers Supabase pour éviter
   // la croissance infinie des tables sync_changelog / sync_deletions / sync_queue.
   cleanupPushedRecords(beforeIso?: string): number {
