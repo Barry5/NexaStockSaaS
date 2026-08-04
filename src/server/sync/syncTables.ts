@@ -54,3 +54,50 @@ export const TABLES_WITHOUT_UPDATED_AT = new Set([
 
 export const SYNC_TABLES = TABLE_MAPPINGS.map(m => m.sqliteName);
 export const SYNC_TABLE_SET = new Set(SYNC_TABLES);
+
+// Priorité de synchronisation ascendante (push SQLite -> Supabase).
+// Une priorité plus PETTE est traitée en priorité. Les tables "parentes"
+// (sans FK vers d'autres tables de sync, ou dépendant seulement de tenants)
+// sont traitées avant leurs "enfants" afin de satisfaire les contraintes de
+// clé étrangère PostgreSQL au moment de l'upsert (ex: invoices avant
+// invoice_audit_log / invoice_items, sales avant sale_items, loans avant
+// repayments). L'order est dérivé du graphe de dépendances FK de 001_full_schema.sql.
+export const TABLE_SYNC_PRIORITY: Record<string, number> = {
+  // 0 — racines (aucune FK ou FK interne entre racines)
+  tenants: 0, roles: 0, permissions: 0,
+  module_definitions: 0, pricing_plans: 0, global_saas_settings: 0,
+  // 1 — dépendent uniquement de tenants / racines
+  users: 1, warehouses: 1, suppliers: 1, customers: 1, products: 1,
+  gdrive_tokens: 1, affiliates: 1,
+  subscription_invoices: 1, subscription_payments: 1,
+  expenses: 1, audit_logs: 1,
+  invoices: 1, loans: 1,
+  role_permissions: 1, tenant_modules: 1, plan_modules: 1,
+  // 2 — dépendent de tables de profondeur 1
+  sales: 2, commission_ledger: 2, commission_payments: 2, commission_audit: 2,
+  product_variants: 2, stock_transfers: 2, commission_rules: 2,
+  repayments: 2, loan_installments: 2,
+  invoice_items: 2, delivery_orders: 2, payments: 2, returns: 2, invoice_audit_log: 2,
+  // 3 — dépendent de tables de profondeur 2
+  sale_items: 3, sale_affiliates: 3, sale_commission_items: 3,
+  delivery_order_items: 3, return_items: 3, delivery_note_audit: 3,
+};
+
+const DEFAULT_SYNC_PRIORITY = 50;
+
+let priorityCaseBody: string | null = null;
+// Génère une expression SQL `CASE <column> WHEN ... THEN n ... ELSE 50 END`
+// utilisable dans un ORDER BY pour traiter les tables parentes avant leurs
+// enfant (clé primaire résolue via sync_uuid_map -> FK valide en amont).
+export function tablePriorityCase(column = 'table_name'): string {
+  if (!priorityCaseBody) {
+    priorityCaseBody = (Object.keys(TABLE_SYNC_PRIORITY) as string[])
+      .map(t => `WHEN '${t}' THEN ${TABLE_SYNC_PRIORITY[t]}`)
+      .join(' ');
+  }
+  return `CASE ${column} ${priorityCaseBody} ELSE ${DEFAULT_SYNC_PRIORITY} END`;
+}
+
+export function tablePriority(tableName: string): number {
+  return TABLE_SYNC_PRIORITY[tableName] ?? DEFAULT_SYNC_PRIORITY;
+}

@@ -8,7 +8,7 @@ import { syncService } from '../sync/syncService.js';
 import { syncEngine } from '../sync/syncEngine.js';
 import { supabaseWorker } from '../sync/supabaseWorker.js';
 import * as SyncQueue from '../sync/syncQueue.js';
-import { SYNC_TABLES } from '../sync/syncTables.js';
+import { SYNC_TABLES, SYNC_TABLE_SET } from '../sync/syncTables.js';
 
 const router = Router();
 
@@ -360,6 +360,38 @@ router.get('/failed', authenticateToken, requireRole(['superadmin']), (req, res)
     LIMIT 200
   `).all() as any[];
   res.json({ count: items.length, items });
+});
+
+// POST /api/sync/retry-failed: remet en `pending` les items de file en échec
+// (y compris au max de retries) pour les rejouer avec le code corrigé.
+// Utile après un correctif transformant les colonnes/absentes. Option : ?table_name=.
+// On remet retry_count à 0 pour offrir un quota de nouvelles tentatives (borné).
+export function resetFailedItems(tableName?: string): number {
+  if (tableName) {
+    if (!SYNC_TABLE_SET.has(tableName)) {
+      throw new Error(`Table inconnue pour la synchronisation: ${tableName}`);
+    }
+    return db.prepare(`
+      UPDATE sync_queue
+      SET status = 'pending', last_error = NULL, retry_count = 0
+      WHERE status = 'failed' AND table_name = ?
+    `).run(tableName).changes;
+  }
+  return db.prepare(`
+    UPDATE sync_queue
+    SET status = 'pending', last_error = NULL, retry_count = 0
+    WHERE status = 'failed'
+  `).run().changes;
+}
+
+router.post('/retry-failed', authenticateToken, requireRole(['superadmin']), (req, res, next) => {
+  try {
+    const tableName = req.body?.table_name as string | undefined;
+    const reset = resetFailedItems(tableName);
+    res.json({ reset });
+  } catch (err: any) {
+    next(err);
+  }
 });
 
 // Tables métier à vider (ordre enfants -> parents pour respecter les FK).

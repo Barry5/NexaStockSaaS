@@ -18,8 +18,8 @@ export const NO_LEGACY_ID_TABLES = new Set([
 const ALWAYS_EXCLUDED_COLUMNS = new Set(['version']);
 
 // Colonnes SQLite absentes du schéma PG pour certaines tables.
-// D'après 001_full_schema.sql, seules ces tables n'ont PAS de colonne
-// updated_at en PostgreSQL (elles n'ont que created_at).
+// D'après 001_full_schema.sql, certaines tables n'ont PAS de colonne updated_at
+// ou d'autres colonnes locales qui existent seulement dans SQLite.
 const TABLE_EXCLUDED_COLUMNS: Record<string, Set<string>> = {
   permissions: new Set(['updated_at']),
   module_definitions: new Set(['updated_at']),
@@ -27,6 +27,13 @@ const TABLE_EXCLUDED_COLUMNS: Record<string, Set<string>> = {
   role_permissions: new Set(['updated_at']),
   user_roles: new Set(['updated_at']),
   plan_modules: new Set(['updated_at']),
+  products: new Set(['variants']),
+  loans: new Set(['repayments', 'installments']),
+  invoices: new Set(['items', 'deliveryOrders', 'payments', 'returns', 'auditLogs']),
+  delivery_orders: new Set(['items']),
+  returns: new Set(['items']),
+  pricing_plans: new Set(['deleted_at', 'deletedAt']),
+  global_saas_settings: new Set(['deleted_at', 'deletedAt']),
 };
 
 export function getConflictColumn(tableName: string): string {
@@ -91,7 +98,8 @@ export function recordUuidMapping(sqliteId: string, pgUuid: string): void {
 }
 
 function isFkColumn(pgKey: string): boolean {
-  const fkSuffixes = ['_id', 'Id'];
+  if (pgKey === 'user_id') return false;
+  const fkSuffixes = ['_id'];
   return fkSuffixes.some(s => pgKey.endsWith(s)) && pgKey !== 'legacy_id';
 }
 
@@ -111,6 +119,41 @@ export function snakeToCamel(key: string): string {
   return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
 
+function getAllowedRecordKeys(tableName: string): Set<string> {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as { name: string }[];
+  const allowed = new Set(columns.map(c => c.name));
+  allowed.add('legacy_id');
+  allowed.add('_table');
+  return allowed;
+}
+
+// Colonnes PostgreSQL NOT NULL SANS DEFAULT qui risquent d'être absentes d'un
+// payload local (ex: facture historique poussée avec l'ancien payload minimal
+// ne contenant pas `date`). Sans repli, PostgreSQL rejette l'insertion avec une
+// violation de contrainte NOT NULL. On complète avec la colonne source
+// (`created_at`) quand elle est disponible, sinon avec l'horodatage courant.
+const PG_REQUIRED_DEFAULTS: Record<string, [column: string, source?: string]> = {
+  invoices: ['date', 'created_at'],
+  delivery_orders: ['date', 'created_at'],
+  returns: ['date', 'created_at'],
+  payments: ['date', 'created_at'],
+  loans: ['date', 'created_at'],
+  stock_transfers: ['date', 'created_at'],
+  expenses: ['date', 'created_at'],
+  subscription_invoices: ['date', 'created_at'],
+  subscription_payments: ['date', 'created_at'],
+};
+
+function applyRequiredDefaults(tableName: string, pg: Record<string, unknown>) {
+  const def = PG_REQUIRED_DEFAULTS[tableName];
+  if (!def) return;
+  const [column, source] = def;
+  if (pg[column] === null || pg[column] === undefined) {
+    const fallback = (source && pg[source]) ? pg[source] : new Date().toISOString();
+    pg[column] = fallback;
+  }
+}
+
 export function transformToPostgres(tableName: string, record: Record<string, unknown>): Record<string, unknown> {
   const pg: Record<string, unknown> = {};
   const skipKeys = new Set(['_table', ...ALWAYS_EXCLUDED_COLUMNS]);
@@ -123,8 +166,12 @@ export function transformToPostgres(tableName: string, record: Record<string, un
   }
   if (!NO_LEGACY_ID_TABLES.has(tableName)) skipKeys.add('id');
 
+  const allowedKeys = getAllowedRecordKeys(tableName);
+
   for (const [key, value] of Object.entries(record)) {
     if (skipKeys.has(key)) continue;
+    if (!allowedKeys.has(key) && key !== 'legacy_id') continue;
+
     let pgKey = key === 'tenantId' ? 'tenant_id' : key === 'legacy_id' ? 'legacy_id' : camelToSnake(key);
 
     // Correction pour la colonne 'returns' de la table 'sales' qui est nommée 'returns_json' en PG
@@ -144,10 +191,15 @@ export function transformToPostgres(tableName: string, record: Record<string, un
       try { pg[pgKey] = JSON.parse(value); } catch { pg[pgKey] = value; }
     } else if (typeof value === 'string' && isFkColumn(pgKey)) {
       pg[pgKey] = resolveFkValue(value);
-    } else {
+     } else {
       pg[pgKey] = value;
     }
   }
+
+  // Compléter les colonnes NOT NULL sans DEFAULT avant d'ajouter id/legacy_id,
+  // afin que les enregistrements (notamment historiques) ne soient pas rejetés
+  // par une contrainte NOT NULL côté PostgreSQL.
+  applyRequiredDefaults(tableName, pg);
 
   if (NO_LEGACY_ID_TABLES.has(tableName)) {
     if ((tableName === 'tenant_modules' || tableName === 'plan_modules') && record.id) {

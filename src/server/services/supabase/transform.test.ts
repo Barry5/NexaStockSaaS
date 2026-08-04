@@ -61,11 +61,10 @@ describe('transformToPostgres : exclusion et ommission conformes au schéma PG',
   it('omet created_at/updated_at nulls (PG: NOT NULL DEFAULT NOW()) au lieu d\'envoyer NULL', () => {
     const pg = transform('pricing_plans', {
       id: 'plan-free', name: 'Free', price: 0, version: 1,
-      createdAt: null, updatedAt: null, categoryId: null,
+      createdAt: null, updatedAt: null,
     });
     expect(pg.created_at).toBeUndefined();
     expect(pg.updated_at).toBeUndefined();
-    expect(pg.category_id).toBeNull();
     expect(pg.legacy_id).toBe('plan-free');
   });
 
@@ -87,7 +86,41 @@ describe('transformToPostgres : exclusion et ommission conformes au schéma PG',
     expect(pg.legacy_id).toBe('t-1');
   });
 
-  it('plan_modules: pas de legacy_id en PG -> genère un UUID pk id et utilise "id" comme colonne de conflit', () => {
+  it('ignore les relations embarquées non-schéma comme variants et repayments', () => {
+    const product = transform('products', {
+      id: 'p-123', name: 'T-shirt', sku: 'TS-1', buyPrice: 10, sellPrice: 15,
+      category: 'Apparel', quantity: 20, alertThreshold: 2, tenantId: 't-1', createdAt: '2026-07-31T00:00:00Z',
+      variants: [{ id: 'v-1', name: 'Red' }],
+    });
+    expect(product.variants).toBeUndefined();
+    expect(product.legacy_id).toBe('p-123');
+
+    const loan = transform('loans', {
+      id: 'l-123', type: 'personal', partnerName: 'Bank', amount: 1000, date: '2026-07-31T00:00:00Z',
+      remainingBalance: 1000, status: 'actif', tenantId: 't-1', repayments: [{ id: 'r-1', amount: 100 }],
+      installments: [{ id: 'i-1', amount: 100 }],
+    });
+    expect(loan.repayments).toBeUndefined();
+    expect(loan.installments).toBeUndefined();
+    expect(loan.legacy_id).toBe('l-123');
+  });
+
+  it('exclut deletedAt pour pricing_plans et global_saas_settings quand le schéma PG ne l’attend pas', () => {
+    const plan = transform('pricing_plans', {
+      id: 'plan-free', name: 'Free', price: 0, currency: 'EUR', durationDays: 30,
+      deletedAt: '2026-07-31T00:00:00Z', version: 1,
+    });
+    expect(plan.deleted_at).toBeUndefined();
+    expect(plan.legacy_id).toBe('plan-free');
+
+    const settings = transform('global_saas_settings', {
+      id: 1, trialDays: 14, gracePeriodDays: 5, deletedAt: '2026-07-31T00:00:00Z',
+    });
+    expect(settings.deleted_at).toBeUndefined();
+    expect(settings.id).toBe(1);
+  });
+
+  it('plan_modules: pas de legacy_id en PG -> génère un UUID pk id et utilise "id" comme colonne de conflit', () => {
     const pg = transform('plan_modules', {
       id: 'pm-123', planId: 'plan-premium', moduleKey: 'commissions', enabled: 1,
       version: 1, updatedAt: null, createdAt: null,
@@ -146,5 +179,21 @@ describe('transformToPostgres : exclusion et ommission conformes au schéma PG',
     expect(crit.column).toBe('id');
     expect(typeof crit.value).toBe('string');
     expect(crit.value).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('complète la date absente/null des factures pour éviter une violation NOT NULL PG', () => {
+    // Payload minimal sans `date` (ex: historique poussé avant le correctif pleine ligne)
+    const minimal = transform('invoices', {
+      id: 'inv-1', invoiceNumber: 'FAC-1', tenantId: 't-1', legacy_id: 'inv-1',
+    });
+    expect(minimal.date).toBeDefined();
+    expect(typeof minimal.date).toBe('string');
+    expect(minimal.legacy_id).toBe('inv-1');
+
+    // date explicitement null -> repli sur created_at quand disponible
+    const nulled = transform('invoices', {
+      id: 'inv-2', date: null, createdAt: '2026-07-31T00:00:00Z', legacy_id: 'inv-2',
+    });
+    expect(nulled.date).toBe('2026-07-31T00:00:00Z');
   });
 });

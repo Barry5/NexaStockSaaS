@@ -1,4 +1,6 @@
 import db from '../database/db.js';
+import { tablePriorityCase } from './syncTables.js';
+
 
 export type SyncOperation = 'CREATE' | 'UPDATE' | 'DELETE';
 export type SyncStatus = 'pending' | 'processing' | 'completed' | 'failed';
@@ -45,7 +47,7 @@ export function dequeue(batchSize: number = 50): SyncQueueItem[] {
   return db.prepare(`
     SELECT * FROM sync_queue
     WHERE status = 'pending' AND retry_count < max_retries
-    ORDER BY created_at ASC
+    ORDER BY ${tablePriorityCase()}, created_at ASC
     LIMIT ?
   `).all(batchSize) as SyncQueueItem[];
 }

@@ -125,6 +125,22 @@ describe('enregistrement systématique des écritures pour la synchronisation', 
     expect(invoiceUpdate.payload).toContain('"paidAmount":40');
   });
 
+  it('crée les factures avec un payload de sync propre sans items embarqués', () => {
+    const invoice = invoiceService.create({
+      invoiceNumber: 'FAC-TEST-2', date: new Date().toISOString(), dueDate: null,
+      customerId: null, customerName: 'Test User', customerPhone: null, customerEmail: null, customerAddress: null,
+      subtotal: 100, taxRate: 0, tax: 0, discount: 0, discountType: 'fixed', shipping: 0,
+      total: 100, notes: null, termsConditions: null,
+      items: [{ id: 'ii-1', invoiceId: 'inv-test-2', productId: 'p-1', productName: 'Test', productSku: 'TS-1', quantity: 1, price: 100, total: 100 }],
+    }, 't-test-1', 'u-1', 'Superadmin');
+    const create = lastQueueRow('invoices', 'CREATE');
+    expect(create).toBeTruthy();
+    const payload = JSON.parse(create.payload);
+    expect(payload.items).toBeUndefined();
+    expect(payload.date).toBeDefined();
+    expect(payload.legacy_id).toBe(invoice.id);
+  });
+
   it('enregistre les permissions de rôles (role_permissions) et les mises à jour de rôles', () => {
     db.prepare(`INSERT INTO roles (id, name, label, description, is_system, tenantId, createdAt) VALUES ('role-test-1', 'test_role', 'Test Role', NULL, 0, 't-test-1', ?)`)
       .run(new Date().toISOString());

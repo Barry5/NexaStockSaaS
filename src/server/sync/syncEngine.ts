@@ -1,7 +1,7 @@
-﻿﻿import db from '../database/db.js';
+﻿import db from '../database/db.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as SyncQueue from './syncQueue.js';
-import { SYNC_TABLE_SET, SYNC_TABLES } from './syncTables.js';
+import { SYNC_TABLE_SET, SYNC_TABLES, tablePriorityCase } from './syncTables.js';
 
 export type SyncOperation = 'CREATE' | 'UPDATE' | 'DELETE';
 
@@ -227,7 +227,7 @@ export class SyncEngine {
     const items = db.prepare(`
       SELECT c.* FROM sync_changelog c
       WHERE c.pushed_to_supabase = 0
-      ORDER BY c.created_at ASC
+      ORDER BY ${tablePriorityCase('c.table_name')}, c.created_at ASC
       LIMIT 200
     `).all() as any[];
 

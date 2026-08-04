@@ -73,7 +73,8 @@ export class LoanService extends BaseService {
       }
     });
 
-    this.enqueueSync('CREATE', loanId, { ...data, legacy_id: loanId }, tenantId);
+    const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(loanId) as any;
+    this.enqueueSync('CREATE', loanId, { ...loan, legacy_id: loanId }, tenantId);
 
     return this.getById(loanId);
   }
@@ -119,7 +120,8 @@ export class LoanService extends BaseService {
       }
     });
 
-    this.enqueueSync('UPDATE', id, { ...data, legacy_id: id }, tenantId);
+    const updatedLoan = db.prepare('SELECT * FROM loans WHERE id = ?').get(id) as any;
+    this.enqueueSync('UPDATE', id, { ...updatedLoan, legacy_id: id }, tenantId);
 
     return this.getById(id);
   }

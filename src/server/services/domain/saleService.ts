@@ -63,23 +63,40 @@ export class SaleService extends BaseService {
       );
 
       for (const item of data.items) {
+        const saleItemId = `${saleId}-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const product = db.prepare('SELECT quantity, name FROM products WHERE id = ? AND tenantId = ?').get(item.productId, tenantId) as { quantity: number; name: string } | undefined;
+        const productName = item.productName || product?.name || 'Produit inconnu';
+
+        const saleItem = {
+         id: saleItemId,
+         saleId,
+         productId: item.productId || null,
+         productName,
+         quantity: item.quantity,
+         price: item.price,
+         total: item.total,
+         qtyDelivered: 0,
+         qtyReturned: 0,
+        };
+
         db.prepare(`
           INSERT INTO sale_items (id, saleId, productId, productName, quantity, price, total)
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(
-          `${saleId}-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          saleId,
-          item.productId || null,
-          item.productName,
-          item.quantity,
-          item.price,
-          item.total
+          saleItem.id,
+          saleItem.saleId,
+          saleItem.productId,
+          saleItem.productName,
+          saleItem.quantity,
+          saleItem.price,
+          saleItem.total
         );
 
-        const product = db.prepare('SELECT quantity, name FROM products WHERE id = ? AND tenantId = ?').get(item.productId, tenantId) as { quantity: number; name: string } | undefined;
+        this.enqueueSyncFor('sale_items', saleItem.id, 'CREATE', { ...saleItem, legacy_id: saleItem.id }, tenantId);
+
         if (product) {
-          const nextQty = Math.max(0, product.quantity - item.quantity);
-          db.prepare('UPDATE products SET quantity = ? WHERE id = ? AND tenantId = ?').run(nextQty, item.productId, tenantId);
+         const nextQty = Math.max(0, product.quantity - item.quantity);
+         db.prepare('UPDATE products SET quantity = ? WHERE id = ? AND tenantId = ?').run(nextQty, item.productId, tenantId);
         }
       }
 
@@ -128,21 +145,22 @@ export class SaleService extends BaseService {
 
     this.runInTransaction(() => {
       const items = db.prepare('SELECT * FROM sale_items WHERE saleId = ?').all(id) as any[];
-
+ 
       for (const item of items) {
+        this.enqueueSyncFor('sale_items', item.id, 'DELETE', { ...item, legacy_id: item.id }, tenantId);
         const product = db.prepare('SELECT quantity FROM products WHERE id = ? AND tenantId = ?').get(item.productId, tenantId) as any;
         if (product) {
           db.prepare('UPDATE products SET quantity = ? WHERE id = ? AND tenantId = ?').run(product.quantity + item.quantity, item.productId, tenantId);
         }
       }
-
+ 
       if (sale.paymentMethod === 'credit' && sale.customerId) {
         const customer = db.prepare('SELECT outstandingDebt FROM customers WHERE id = ? AND tenantId = ?').get(sale.customerId, tenantId) as any;
         if (customer) {
           db.prepare('UPDATE customers SET outstandingDebt = ? WHERE id = ? AND tenantId = ?').run(Math.max(0, customer.outstandingDebt - sale.total), sale.customerId, tenantId);
         }
       }
-
+ 
       db.prepare('DELETE FROM sales WHERE id = ? AND tenantId = ?').run(id, tenantId);
 
       const auditId = `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

@@ -33,22 +33,38 @@ export class InvoiceService extends BaseService {
   }
 
   private addAuditLog(invoiceId: string, action: string, details: string, userId?: string, userName?: string) {
-    const id = genId('audit');
-    const timestamp = now();
-    db.prepare(`
-      INSERT INTO invoice_audit_log (id, invoiceId, action, details, userId, userName, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, invoiceId, action, details, userId || null, userName || null, timestamp);
-    this.enqueueSyncFor('invoice_audit_log', id, 'CREATE', {
-      id,
-      invoiceId,
-      action,
-      details,
-      userId: userId || null,
-      userName: userName || null,
-      timestamp,
-      legacy_id: id,
-    });
+   const id = genId('audit');
+   const timestamp = now();
+   db.prepare(`
+     INSERT INTO invoice_audit_log (id, invoiceId, action, details, userId, userName, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+   `).run(id, invoiceId, action, details, userId || null, userName || null, timestamp);
+   this.enqueueSyncFor('invoice_audit_log', id, 'CREATE', {
+     id,
+     invoiceId,
+     action,
+     details,
+     userId: userId || null,
+     userName: userName || null,
+     timestamp,
+     legacy_id: id,
+   });
+  }
+
+  private enqueueInvoiceItem(item: any, tenantId: string) {
+   this.enqueueSyncFor('invoice_items', item.id, 'CREATE', { ...item, legacy_id: item.id }, tenantId);
+  }
+
+  private enqueueInvoiceItemDelete(item: any, tenantId: string) {
+   this.enqueueSyncFor('invoice_items', item.id, 'DELETE', { ...item, legacy_id: item.id }, tenantId);
+  }
+
+  private enqueueDeliveryOrderItem(item: any, tenantId: string) {
+   this.enqueueSyncFor('delivery_order_items', item.id, 'CREATE', { ...item, legacy_id: item.id }, tenantId);
+  }
+
+  private enqueueReturnItem(item: any, tenantId: string) {
+   this.enqueueSyncFor('return_items', item.id, 'CREATE', { ...item, legacy_id: item.id }, tenantId);
   }
 
   private recalcInvoiceDeliveryStatus(invoiceId: string) {
@@ -148,12 +164,13 @@ export class InvoiceService extends BaseService {
       `).run(id, invoiceNumber, t, dueDate || null, customerId || null, customerName || null, customerPhone || null, customerEmail || null, customerAddress || null, subtotal, taxVal, taxAmount, discVal, dt, shipVal, total, notes || null, termsConditions || null, tenantId, userId || null, userName || null, t, t);
       for (const ii of invoiceItems) {
         db.prepare(`INSERT INTO invoice_items (id, invoiceId, productId, productName, productSku, quantity, price, total, qtyDelivered, qtyReturned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`).run(ii.id, ii.invoiceId, ii.productId, ii.productName, ii.productSku, ii.quantity, ii.price, ii.total);
+        this.enqueueInvoiceItem(ii, tenantId);
       }
       this.addAuditLog(id, 'INVOICE_CREATED', `Facture ${invoiceNumber} créée avec ${items.length} article(s)`, userId, userName);
     });
-
-    this.enqueueSync('CREATE', id, { id, invoiceNumber, tenantId, legacy_id: id }, tenantId);
+ 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
+    this.enqueueSync('CREATE', id, { ...invoice, legacy_id: id }, tenantId);
     const createdItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(id);
     return { ...invoice, items: createdItems, deliveryOrders: [], payments: [], returns: [] };
   }
@@ -181,6 +198,7 @@ export class InvoiceService extends BaseService {
     const shipVal = shipping ?? inv.shipping;
     const total = subtotal + taxAmount - discAmount + shipVal;
 
+    const existingItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(inv.id) as any[];
     this.runInTransaction(() => {
       db.prepare(`
         UPDATE invoices SET customerId=?, customerName=?, customerPhone=?, customerEmail=?, customerAddress=?, subtotal=?, taxRate=?, tax=?, discount=?, discountType=?, shipping=?, total=?, notes=?, termsConditions=?, dueDate=?, updatedAt=?
@@ -194,8 +212,18 @@ export class InvoiceService extends BaseService {
       this.addAuditLog(inv.id, 'INVOICE_UPDATED', 'Facture modifiée', userId, userName);
     });
 
-    this.enqueueSync('UPDATE', id, { ...data, id, legacy_id: id }, tenantId);
+    const newItemIds = new Set(invoiceItems.map((ii: any) => ii.id));
+    for (const oldItem of existingItems) {
+      if (!newItemIds.has(oldItem.id)) {
+        this.enqueueInvoiceItemDelete(oldItem, tenantId);
+      }
+    }
+    for (const ii of invoiceItems) {
+      this.enqueueInvoiceItem(ii, tenantId);
+    }
+
     const updated = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) as any;
+    this.enqueueSync('UPDATE', id, { ...updated, legacy_id: id }, tenantId);
     const updatedItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(inv.id);
     return { ...updated, items: updatedItems };
   }
@@ -253,10 +281,21 @@ export class InvoiceService extends BaseService {
         const invItem = db.prepare('SELECT productId, productName, price FROM invoice_items WHERE id = ?').get(item.invoiceItemId) as any;
         const doiId = genId('doi');
         const total = (invItem.price || 0) * (item.quantity || 0);
+        const deliveryItem = {
+          id: doiId,
+          deliveryOrderId: doId,
+          invoiceItemId: item.invoiceItemId,
+          productId: invItem.productId || null,
+          productName: invItem.productName,
+          quantity: item.quantity,
+          price: invItem.price,
+          total,
+        };
         db.prepare(`
           INSERT INTO delivery_order_items (id, deliveryOrderId, invoiceItemId, productId, productName, quantity, price, total)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(doiId, doId, item.invoiceItemId, invItem.productId || null, invItem.productName, item.quantity, invItem.price, total);
+        `).run(deliveryItem.id, deliveryItem.deliveryOrderId, deliveryItem.invoiceItemId, deliveryItem.productId, deliveryItem.productName, deliveryItem.quantity, deliveryItem.price, deliveryItem.total);
+        this.enqueueDeliveryOrderItem(deliveryItem, inv.tenantId);
       }
       this.addAuditLog(inv.id, 'DELIVERY_ORDER_CREATED', `BL ${deliveryNumber} créé`, userId, userName);
     });
@@ -279,18 +318,21 @@ export class InvoiceService extends BaseService {
       db.prepare('UPDATE delivery_orders SET status = ?, validatedAt = ? WHERE id = ?').run('validated', t, do_.id);
       for (const item of items) {
         db.prepare('UPDATE invoice_items SET qtyDelivered = qtyDelivered + ? WHERE id = ?').run(item.quantity, item.invoiceItemId);
-        const invItem = db.prepare('SELECT productId FROM invoice_items WHERE id = ?').get(item.invoiceItemId) as any;
+        const invItem = db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(item.invoiceItemId) as any;
         if (invItem?.productId) {
           const product = db.prepare('SELECT quantity, name FROM products WHERE id = ?').get(invItem.productId) as any;
           if (product) {
             db.prepare('UPDATE products SET quantity = ? WHERE id = ?').run(Math.max(0, product.quantity - item.quantity), invItem.productId);
           }
         }
+        if (invItem) {
+          this.enqueueSync('UPDATE', invItem.id, { ...invItem, legacy_id: invItem.id }, do_.tenantId);
+        }
       }
       this.recalcInvoiceDeliveryStatus(do_.invoiceId);
       this.addAuditLog(do_.invoiceId, 'DELIVERY_ORDER_VALIDATED', `BL ${do_.deliveryNumber} validé - stock déduit`, userId, userName);
     });
-
+ 
     this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, do_.tenantId);
     return { ...do_, status: 'validated', validatedAt: t };
   }
@@ -387,11 +429,22 @@ export class InvoiceService extends BaseService {
 
       for (const item of items) {
         const invItem = db.prepare('SELECT productId, productName, price FROM invoice_items WHERE id = ?').get(item.invoiceItemId) as any;
-        const total = (invItem.price || 0) * (item.quantity || 0);
+        const returnItem = {
+          id: genId('retitm'),
+          returnId,
+          invoiceItemId: item.invoiceItemId,
+          productId: invItem.productId || null,
+          productName: invItem.productName,
+          quantity: item.quantity,
+          price: invItem.price,
+          total: (invItem.price || 0) * (item.quantity || 0),
+          reason: item.reason || null,
+        };
         db.prepare(`
           INSERT INTO return_items (id, returnId, invoiceItemId, productId, productName, quantity, price, total, reason)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(genId('retitm'), returnId, item.invoiceItemId, invItem.productId || null, invItem.productName, item.quantity, invItem.price, total, item.reason || null);
+        `).run(returnItem.id, returnItem.returnId, returnItem.invoiceItemId, returnItem.productId, returnItem.productName, returnItem.quantity, returnItem.price, returnItem.total, returnItem.reason);
+        this.enqueueReturnItem(returnItem, inv.tenantId);
       }
       this.addAuditLog(inv.id, 'RETURN_CREATED', `Retour ${returnNumber} créé`, userId, userName);
     });
@@ -414,15 +467,18 @@ export class InvoiceService extends BaseService {
       db.prepare('UPDATE returns SET status = ?, validatedAt = ? WHERE id = ?').run('validated', t, ret.id);
       for (const item of items) {
         db.prepare('UPDATE invoice_items SET qtyReturned = qtyReturned + ? WHERE id = ?').run(item.quantity, item.invoiceItemId);
-        const invItem = db.prepare('SELECT productId FROM invoice_items WHERE id = ?').get(item.invoiceItemId) as any;
+        const invItem = db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(item.invoiceItemId) as any;
         if (invItem?.productId) {
           db.prepare('UPDATE products SET quantity = quantity + ? WHERE id = ?').run(item.quantity, invItem.productId);
+        }
+        if (invItem) {
+          this.enqueueSync('UPDATE', invItem.id, { ...invItem, legacy_id: invItem.id }, ret.tenantId);
         }
       }
       this.recalcInvoiceDeliveryStatus(ret.invoiceId);
       this.addAuditLog(ret.invoiceId, 'RETURN_VALIDATED', `Retour ${ret.returnNumber} validé - stock restitué`, userId, userName);
     });
-
+ 
     this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, ret.tenantId);
     return { ...ret, status: 'validated', validatedAt: t };
   }

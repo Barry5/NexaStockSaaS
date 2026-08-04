@@ -85,8 +85,8 @@ describe('Analyse de scénarios de synchronisation', () => {
     // 1. Setup: Créer un client et un produit
     const tenantId = 't-main';
     db.prepare(`INSERT INTO tenants (id, name, plan, currency, createdAt) VALUES (?, ?, ?, ?, ?)`).run(tenantId, 'Main', 'Free', 'EUR', new Date().toISOString());
-    const customer = customerService.create({ name: 'Client Test Sync', tenantId });
-    const product = productService.create({ name: 'Produit Test Sync', sku: 'SYNC-001', category: 'Test', buyPrice: 5, sellPrice: 10, quantity: 100, tenantId });
+    const customer = customerService.create({ name: 'Client Test Sync' }, tenantId);
+    const product = productService.create({ name: 'Produit Test Sync', sku: 'SYNC-001', category: 'Test', buyPrice: 5, sellPrice: 10, quantity: 100 }, tenantId);
 
     // Vider la file et les mocks
     db.prepare('DELETE FROM sync_queue').run();
@@ -94,19 +94,21 @@ describe('Analyse de scénarios de synchronisation', () => {
 
     // 2. Action: Créer une vente complexe
     const saleInput = {
+      invoiceNumber: 'S-TEST-001',
       date: new Date().toISOString(),
       customerId: customer.id,
       employeeName: 'Test User',
-      items: [{ productId: product.id, quantity: 2, price: 10, total: 20 }],
+      items: [{ productId: product.id, productName: product.name, quantity: 2, price: 10, total: 20 }],
       subtotal: 20, tax: 0, total: 20, paymentMethod: 'cash', status: 'Payée', tenantId,
     };
-    const sale = saleService.createSale(saleInput);
+    const existingUser = db.prepare('SELECT id, name FROM users WHERE role = ? LIMIT 1').get('superadmin') as any;
+    const sale = saleService.create(saleInput, tenantId, existingUser.id, existingUser.name);
 
     // 3. Action: Lancer la synchronisation
     await syncService.syncUp();
 
     // 4. Analyse: Vérifier les appels à Supabase
-    expect(mockBatchUpsert).toHaveBeenCalledTimes(2); // Un appel pour 'sales', un pour 'sale_items'
+    expect(mockBatchUpsert).toHaveBeenCalledTimes(3); // Un appel pour 'sales', un pour 'sale_items', un pour 'audit_logs'
 
     const saleCall = mockBatchUpsert.mock.calls.find(call => call[0] === 'sales');
     const saleItemCall = mockBatchUpsert.mock.calls.find(call => call[0] === 'sale_items');

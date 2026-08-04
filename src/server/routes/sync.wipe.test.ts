@@ -5,6 +5,7 @@ import path from 'path';
 
 let db: any;
 let wipeLocalData: any;
+let resetFailedItems: any;
 let tempDir: string;
 
 describe('wipeLocalData : purge complète en conservant le seed système', () => {
@@ -19,7 +20,7 @@ describe('wipeLocalData : purge complète en conservant le seed système', () =>
     const init = await import('../database/init.js');
     init.initializeDatabase();
 
-    ({ wipeLocalData } = await import('./sync.js'));
+    ({ wipeLocalData, resetFailedItems } = await import('./sync.js'));
   });
 
   afterAll(() => {
@@ -61,5 +62,27 @@ describe('wipeLocalData : purge complète en conservant le seed système', () =>
   it('ne conserve aucun utilisateur non superadmin', () => {
     const otherUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE id != 'u-1'").get().c;
     expect(otherUsers).toBe(0);
+  });
+
+  it('resetFailedItems remet les items en échec en pending avec retry_count à 0', () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO sync_queue (id, table_name, record_id, operation, payload, created_at, status, retry_count, max_retries, last_error) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run('f-1', 'products', 'p-1', 'UPDATE', '{}', now, 'failed', 5, 5, 'Could not find the variants column');
+    db.prepare(`INSERT INTO sync_queue (id, table_name, record_id, operation, payload, created_at, status, retry_count, max_retries, last_error) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run('f-2', 'invoices', 'inv-1', 'CREATE', '{}', now, 'failed', 5, 5, 'null value in column date');
+
+    // Remise en pending filtrée par table : seuls les invoices sont impactés
+    const byTable = resetFailedItems('invoices');
+    expect(byTable).toBe(1);
+
+    const invoiceRow = db.prepare(`SELECT status, retry_count FROM sync_queue WHERE id = 'f-2'`).get();
+    expect(invoiceRow).toEqual({ status: 'pending', retry_count: 0 });
+    const productRow = db.prepare(`SELECT status, retry_count FROM sync_queue WHERE id = 'f-1'`).get();
+    expect(productRow).toEqual({ status: 'failed', retry_count: 5 }); // non touché
+
+    // Remise en pending globale des restants
+    const all = resetFailedItems();
+    expect(all).toBe(1);
+    expect(db.prepare(`SELECT status, retry_count FROM sync_queue WHERE id = 'f-1'`).get()).toEqual({ status: 'pending', retry_count: 0 });
   });
 });

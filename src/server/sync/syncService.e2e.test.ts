@@ -170,4 +170,23 @@ describe('syncService E2E : coherence local <-> Supabase', () => {
     expect(tablesWithoutUpdatedAt.has('plan_modules')).toBe(true);
     expect(tablesWithoutUpdatedAt.has('tenant_modules')).toBe(true);
   });
+
+  it('dequeue ordonne les tables par dépendance (parent avant enfant) indépendamment de created_at', () => {
+    db.prepare('DELETE FROM sync_queue').run();
+
+    // L'enfant (invoice_audit_log) est enfilé AVANT le parent (invoices), et avec
+    // un created_at plus ancien pour prouver que la priorité l'emporte.
+    const earlier = new Date(Date.now() - 60000).toISOString();
+    db.prepare(`INSERT INTO sync_queue (id, table_name, record_id, operation, payload, created_at, status) VALUES (?,?,?,?,?,?,?)`)
+      .run('q-child', 'invoice_audit_log', 'a-1', 'CREATE', '{}', earlier, 'pending');
+    db.prepare(`INSERT INTO sync_queue (id, table_name, record_id, operation, payload, created_at, status) VALUES (?,?,?,?,?,?,?)`)
+      .run('q-parent', 'invoices', 'inv-1', 'CREATE', '{}', new Date().toISOString(), 'pending');
+
+    const items = syncQueue.dequeue(50);
+    const order = items.map((i: any) => i.table_name);
+
+    // Le parent (invoices, priorité 1) doit précéder l'enfant (invoice_audit_log, priorité 2)
+    expect(order).toEqual(['invoices', 'invoice_audit_log']);
+    expect(order.indexOf('invoices')).toBeLessThan(order.indexOf('invoice_audit_log'));
+  });
 });
