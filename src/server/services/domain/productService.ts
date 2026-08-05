@@ -1,5 +1,6 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { genId } from '../../utils/ids.js';
 
 const PRODUCT_COLUMNS = [
   { sqlite: 'id', pg: 'legacy_id' },
@@ -47,7 +48,7 @@ export class ProductService extends BaseService {
   }
 
   create(data: any, tenantId: string): any {
-    const id = data.id || `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const id = data.id || genId('p');
     const now = this.now();
 
     const product = {

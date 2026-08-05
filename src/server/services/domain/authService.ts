@@ -1,6 +1,7 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
 import { generateToken, comparePassword, hashPassword } from '../auth.js';
+import { genId } from '../../utils/ids.js';
 
 export class AuthService extends BaseService {
   constructor() {
@@ -41,7 +42,7 @@ export class AuthService extends BaseService {
     if (existingUser) return { error: 'Cette adresse email est déjà utilisée.', status: 400 };
 
     const tenantId = `t-${companyName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Math.floor(Math.random() * 900 + 100)}`;
-    const userId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const userId = genId('u');
     const trialDays = 14;
     const trialStartDate = new Date().toISOString();
     const trialEndDate = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000).toISOString();
@@ -67,17 +68,20 @@ export class AuthService extends BaseService {
       const customCategories = JSON.stringify(['Général', 'Alimentation', 'Électronique', 'Services']);
       db.prepare('UPDATE tenants SET customCategories = ? WHERE id = ?').run(customCategories, tenantId);
 
-      const productId = `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const productId = genId('p');
       db.prepare(`
         INSERT INTO products (id, name, sku, barcode, description, category, buyPrice, sellPrice, quantity, alertThreshold, tenantId, createdAt)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(productId, 'Article Initial de Démo', 'ART-DEMO-01', '123456789012',
         'Ceci est votre premier article de démonstration, libre à vous de le supprimer.',
         'Général', 10.0, 19.99, 10, 2, tenantId, this.now());
-    });
 
-    this.enqueueSync('CREATE', tenantId, { id: tenantId, name: companyName, legacy_id: tenantId, _table: 'tenants' }, tenantId);
-    this.enqueueSync('CREATE', userId, { id: userId, email, legacy_id: userId, _table: 'users' }, tenantId);
+      // S2 : tenant + user journalisés DANS la transaction de création
+      // (avant : après runInTransaction → fenêtre de crash → enregistrement
+      // local sans changelog → jamais propagé au cloud).
+      this.enqueueSync('CREATE', tenantId, { id: tenantId, name: companyName, legacy_id: tenantId, _table: 'tenants' }, tenantId);
+      this.enqueueSync('CREATE', userId, { id: userId, email, legacy_id: userId, _table: 'users' }, tenantId);
+    });
 
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
     const tenant = db.prepare('SELECT * FROM tenants WHERE id = ?').get(tenantId) as any;

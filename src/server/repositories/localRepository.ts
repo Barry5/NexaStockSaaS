@@ -1,5 +1,6 @@
 ﻿import db from '../database/db.js';
 import type { Repository, Syncable } from './baseRepository.js';
+import { genId } from '../utils/ids.js';
 
 export class LocalRepository<T extends Syncable> implements Repository<T> {
   private columnCache: Set<string> | null = null;
@@ -71,7 +72,7 @@ export class LocalRepository<T extends Syncable> implements Repository<T> {
     const now = new Date().toISOString();
     const record: Record<string, unknown> = {
       ...data,
-      id: (data as any).id || `gen-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      id: (data as any).id || genId('gen'),
     };
 
     const createdCol = this.timestampColumn('created');

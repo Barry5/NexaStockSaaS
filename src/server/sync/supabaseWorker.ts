@@ -1,6 +1,6 @@
 ﻿import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
-import { isSupabaseConfigured, checkConnection, batchUpsert } from '../services/supabase/supabaseService.js';
+import { isSupabaseConfigured, checkConnection, batchUpsert, ensureUuidMappingForPush } from '../services/supabase/supabaseService.js';
 import { transformToPostgres, getConflictColumn, getDeleteCriteria } from '../services/supabase/transform.js';
 import { SYNC_TABLE_SET } from './syncTables.js';
 import fs from 'fs';
@@ -94,6 +94,19 @@ export class SupabaseWorker {
     } catch { /* ignore */ }
   }
 
+  // Rafraîchit le mtime du lock à chaque tick (audit §9) : tant que le worker
+  // vit, le lock n'est jamais considéré « stale » (10 min sans activité réseau
+  // ne suffisent plus à laisser un second worker prendre la main).
+  private touchLock(): void {
+    try {
+      if (fs.existsSync(this.lockPath)) {
+        fs.utimesSync(this.lockPath, new Date(), new Date());
+      } else {
+        fs.writeFileSync(this.lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf8');
+      }
+    } catch { /* ignore */ }
+  }
+
   async start(): Promise<void> {
     if (this.intervalId) return;
     if (!this.acquireLock()) return;
@@ -146,6 +159,8 @@ export class SupabaseWorker {
     this.isRunning = true;
 
     try {
+      this.touchLock();
+
       if (!this.online) {
         this.online = await this.checkConnectivity();
         if (!this.online) {
@@ -269,6 +284,9 @@ export class SupabaseWorker {
           if (error) throw error;
         } else {
           const { syncService } = await import('./syncService.js');
+          // Réaligner le mapping UUID sur la ligne PG existante AVANT le push
+          // (évite les doublons de legacy_id quand sync_uuid_map est incomplet).
+          await ensureUuidMappingForPush(change.table, change.recordId);
           const record = syncService.getCurrentRecordForPush(change.table, change.recordId, change.data);
           const pgRecord = transformToPostgres(change.table, record);
           const result = await batchUpsert(mapping, [pgRecord], getConflictColumn(mapping));
@@ -280,7 +298,7 @@ export class SupabaseWorker {
       } catch (err: any) {
         // Retry borné + dead-letter : incrémente retry_count, passe en 'dead'
         // au-delà de max_retries (visible via /api/sync/failed).
-        syncEngine.markChangeFailed(change.changeId);
+        syncEngine.markChangeFailed(change.changeId, err?.message);
         failed++;
       }
     }

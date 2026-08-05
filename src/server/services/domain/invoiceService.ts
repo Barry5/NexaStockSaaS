@@ -1,8 +1,13 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { randomUUID } from 'crypto';
+import { nextCounter } from '../../utils/counters.js';
 
+// UUID v4 (audit §2.6, P6) : élimine les collisions d'IDs entre appareils
+// (les anciens `inv-${Date.now()}-${random}` pouvaient se chevaucher à la même
+// milliseconde). Le préfixe est conservé pour la lisibilité des logs/legacy_id.
 function genId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return `${prefix}-${randomUUID()}`;
 }
 
 function now() {
@@ -14,22 +19,20 @@ export class InvoiceService extends BaseService {
     super('invoices', 'invoices', []);
   }
 
+  // Numérotation comptable SÛRE (audit §2.5, P5) : compteur persistant par
+  // (tenantId, type, année) dans `invoice_counters` (migration 014). Immunisé
+  // contre les suppressions (le COUNT+1 précédent dupliquait les numéros) et
+  // atomique (INSERT ... ON CONFLICT DO UPDATE counter = counter + 1).
   private generateInvoiceNumber(tenantId: string): string {
-    const count = db.prepare('SELECT COUNT(*) as c FROM invoices WHERE tenantId = ?').get(tenantId) as any;
-    const year = new Date().getFullYear();
-    return `FAC-${year}-${String((count?.c || 0) + 1).padStart(4, '0')}`;
+    return nextCounter(tenantId, 'FAC', 'FAC');
   }
 
   private generateDeliveryNumber(tenantId: string): string {
-    const count = db.prepare('SELECT COUNT(*) as c FROM delivery_orders WHERE tenantId = ?').get(tenantId) as any;
-    const year = new Date().getFullYear();
-    return `BL-${year}-${String((count?.c || 0) + 1).padStart(4, '0')}`;
+    return nextCounter(tenantId, 'BL', 'BL');
   }
 
   private generateReturnNumber(tenantId: string): string {
-    const count = db.prepare('SELECT COUNT(*) as c FROM returns WHERE tenantId = ?').get(tenantId) as any;
-    const year = new Date().getFullYear();
-    return `RET-${year}-${String((count?.c || 0) + 1).padStart(4, '0')}`;
+    return nextCounter(tenantId, 'RET', 'RET');
   }
 
   private addAuditLog(invoiceId: string, action: string, details: string, userId?: string, userName?: string) {
@@ -141,7 +144,6 @@ export class InvoiceService extends BaseService {
     if (!items || items.length === 0) throw new Error('Au moins un article requis');
 
     const id = genId('inv');
-    const invoiceNumber = this.generateInvoiceNumber(tenantId);
     const t = now();
     let subtotal = 0;
     const invoiceItems = items.map((item: any) => {
@@ -158,6 +160,9 @@ export class InvoiceService extends BaseService {
     const total = subtotal + taxAmount - discAmount + shipVal;
 
     this.runInTransaction(() => {
+      // Alloué DANS la transaction (même garantie que l'INSERT : une facture
+      // annulée ne consomme pas deux numéros, une course multi-instance non plus).
+      const invoiceNumber = this.generateInvoiceNumber(tenantId);
       db.prepare(`
         INSERT INTO invoices (id, invoiceNumber, type, date, dueDate, customerId, customerName, customerPhone, customerEmail, customerAddress, subtotal, taxRate, tax, discount, discountType, shipping, total, paidAmount, status, deliveryStatus, paymentStatus, notes, termsConditions, tenantId, employeeId, employeeName, createdAt, updatedAt)
         VALUES (?, ?, 'sale', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'draft', 'not_delivered', 'unpaid', ?, ?, ?, ?, ?, ?, ?)
@@ -166,11 +171,16 @@ export class InvoiceService extends BaseService {
         db.prepare(`INSERT INTO invoice_items (id, invoiceId, productId, productName, productSku, quantity, price, total, qtyDelivered, qtyReturned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`).run(ii.id, ii.invoiceId, ii.productId, ii.productName, ii.productSku, ii.quantity, ii.price, ii.total);
         this.enqueueInvoiceItem(ii, tenantId);
       }
+      // ⚠️ S2 (audit §2.2) : la facture principale est journalisée DANS la
+      // même transaction que l'écriture métier (avant : après runInTransaction
+      // → fenêtre de crash où la ligne existe sans changelog → jamais poussée,
+      // puis détruite par la réconciliation).
+      const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
+      this.enqueueSync('CREATE', id, { ...invoice, legacy_id: id }, tenantId);
       this.addAuditLog(id, 'INVOICE_CREATED', `Facture ${invoiceNumber} créée avec ${items.length} article(s)`, userId, userName);
     });
- 
+
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
-    this.enqueueSync('CREATE', id, { ...invoice, legacy_id: id }, tenantId);
     const createdItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(id);
     return { ...invoice, items: createdItems, deliveryOrders: [], payments: [], returns: [] };
   }
@@ -207,23 +217,23 @@ export class InvoiceService extends BaseService {
       db.prepare('DELETE FROM invoice_items WHERE invoiceId = ?').run(inv.id);
       for (const ii of invoiceItems) {
         db.prepare(`INSERT INTO invoice_items (id, invoiceId, productId, productName, productSku, quantity, price, total, qtyDelivered, qtyReturned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(ii.id, ii.invoiceId, ii.productId, ii.productName, ii.productSku, ii.quantity, ii.price, ii.total, ii.qtyDelivered, ii.qtyReturned);
+        this.enqueueInvoiceItem(ii, tenantId);
       }
+      // S2 : suppression des items retirés + journalisation de la facture DANS
+      // la transaction (avant : après → fenêtre de crash → changelog absent).
+      const newItemIds = new Set(invoiceItems.map((ii: any) => ii.id));
+      for (const oldItem of existingItems) {
+        if (!newItemIds.has(oldItem.id)) {
+          this.enqueueInvoiceItemDelete(oldItem, tenantId);
+        }
+      }
+      const updated = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) as any;
+      this.enqueueSync('UPDATE', id, { ...updated, legacy_id: id }, tenantId);
       this.recalcInvoiceDeliveryStatus(inv.id);
       this.addAuditLog(inv.id, 'INVOICE_UPDATED', 'Facture modifiée', userId, userName);
     });
 
-    const newItemIds = new Set(invoiceItems.map((ii: any) => ii.id));
-    for (const oldItem of existingItems) {
-      if (!newItemIds.has(oldItem.id)) {
-        this.enqueueInvoiceItemDelete(oldItem, tenantId);
-      }
-    }
-    for (const ii of invoiceItems) {
-      this.enqueueInvoiceItem(ii, tenantId);
-    }
-
     const updated = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) as any;
-    this.enqueueSync('UPDATE', id, { ...updated, legacy_id: id }, tenantId);
     const updatedItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(inv.id);
     return { ...updated, items: updatedItems };
   }
@@ -232,11 +242,14 @@ export class InvoiceService extends BaseService {
     const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
     if (!inv) return null;
     if (inv.status !== 'draft') throw new Error('Seules les factures en brouillon peuvent être validées');
-    db.prepare('UPDATE invoices SET status = ?, updatedAt = ? WHERE id = ?').run('validated', now(), inv.id);
-    this.addAuditLog(inv.id, 'INVOICE_VALIDATED', 'Facture validée', userId, userName);
-    this.recalcInvoiceDeliveryStatus(inv.id);
-    this.recalcInvoicePaymentStatus(inv.id);
-    this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, inv.tenantId);
+    this.runInTransaction(() => {
+      db.prepare('UPDATE invoices SET status = ?, updatedAt = ? WHERE id = ?').run('validated', now(), inv.id);
+      this.addAuditLog(inv.id, 'INVOICE_VALIDATED', 'Facture validée', userId, userName);
+      this.recalcInvoiceDeliveryStatus(inv.id);
+      this.recalcInvoicePaymentStatus(inv.id);
+      // S2 : journalisé dans la même transaction que l'écriture métier.
+      this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, inv.tenantId);
+    });
     return db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) as any;
   }
 
@@ -249,8 +262,9 @@ export class InvoiceService extends BaseService {
       db.prepare('UPDATE invoices SET status = ?, deliveryStatus = ?, notes = ?, updatedAt = ? WHERE id = ?').run('cancelled', 'cancelled', reason || inv.notes, now(), inv.id);
       db.prepare('UPDATE delivery_orders SET status = ? WHERE invoiceId = ? AND status = ?').run('cancelled', inv.id, 'draft');
       this.addAuditLog(inv.id, 'INVOICE_CANCELLED', reason ? `Annulée : ${reason}` : 'Facture annulée', userId, userName);
+      // S2 : journalisé dans la même transaction que l'écriture métier.
+      this.enqueueSync('UPDATE', id, { status: 'cancelled', legacy_id: id }, inv.tenantId);
     });
-    this.enqueueSync('UPDATE', id, { status: 'cancelled', legacy_id: id }, inv.tenantId);
     return db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) as any;
   }
 
@@ -268,10 +282,11 @@ export class InvoiceService extends BaseService {
     }
 
     const doId = genId('do');
-    const deliveryNumber = this.generateDeliveryNumber(inv.tenantId);
     const t = now();
 
     this.runInTransaction(() => {
+      // Numéro alloué dans la transaction (compteur persistant, S6).
+      const deliveryNumber = this.generateDeliveryNumber(inv.tenantId);
       db.prepare(`
         INSERT INTO delivery_orders (id, deliveryNumber, invoiceId, date, status, notes, createdBy, createdByName, tenantId, createdAt)
         VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)
@@ -297,10 +312,11 @@ export class InvoiceService extends BaseService {
         `).run(deliveryItem.id, deliveryItem.deliveryOrderId, deliveryItem.invoiceItemId, deliveryItem.productId, deliveryItem.productName, deliveryItem.quantity, deliveryItem.price, deliveryItem.total);
         this.enqueueDeliveryOrderItem(deliveryItem, inv.tenantId);
       }
+      // S2 : le BL est journalisé DANS la transaction de création.
+      this.enqueueSync('CREATE', doId, { id: doId, deliveryNumber, invoiceId, tenantId: inv.tenantId, legacy_id: doId, _table: 'delivery_orders' }, inv.tenantId);
       this.addAuditLog(inv.id, 'DELIVERY_ORDER_CREATED', `BL ${deliveryNumber} créé`, userId, userName);
     });
 
-    this.enqueueSync('CREATE', doId, { id: doId, deliveryNumber, invoiceId, tenantId: inv.tenantId, legacy_id: doId, _table: 'delivery_orders' }, inv.tenantId);
     const createdDO = db.prepare('SELECT * FROM delivery_orders WHERE id = ?').get(doId) as any;
     const doi = db.prepare('SELECT * FROM delivery_order_items WHERE deliveryOrderId = ?').all(doId);
     return { ...createdDO, items: doi };
@@ -331,9 +347,10 @@ export class InvoiceService extends BaseService {
       }
       this.recalcInvoiceDeliveryStatus(do_.invoiceId);
       this.addAuditLog(do_.invoiceId, 'DELIVERY_ORDER_VALIDATED', `BL ${do_.deliveryNumber} validé - stock déduit`, userId, userName);
+      // S2 : journalisé dans la même transaction que l'écriture métier.
+      this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, do_.tenantId);
     });
- 
-    this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, do_.tenantId);
+
     return { ...do_, status: 'validated', validatedAt: t };
   }
 
@@ -360,9 +377,10 @@ export class InvoiceService extends BaseService {
       db.prepare('UPDATE delivery_orders SET status = ?, cancelledAt = ? WHERE id = ?').run('cancelled', t, do_.id);
       this.recalcInvoiceDeliveryStatus(do_.invoiceId);
       this.addAuditLog(do_.invoiceId, 'DELIVERY_ORDER_CANCELLED', `BL ${do_.deliveryNumber} annulé`, userId, userName);
+      // S2 : journalisé dans la même transaction que l'écriture métier.
+      this.enqueueSync('UPDATE', id, { status: 'cancelled', legacy_id: id }, do_.tenantId);
     });
 
-    this.enqueueSync('UPDATE', id, { status: 'cancelled', legacy_id: id }, do_.tenantId);
     return { ...do_, status: 'cancelled', cancelledAt: t };
   }
 
@@ -385,23 +403,25 @@ export class InvoiceService extends BaseService {
       db.prepare('UPDATE invoices SET paidAmount = paidAmount + ?, updatedAt = ? WHERE id = ?').run(amount, t, inv.id);
       this.recalcInvoicePaymentStatus(inv.id);
       this.addAuditLog(inv.id, 'PAYMENT_RECORDED', `Paiement de ${amount} reçu (${method})${reference ? ' ref: ' + reference : ''}`, userId, userName);
+      // S2 : paiement + facture journalisés DANS la transaction (avant :
+      // après runInTransaction → fenêtre de crash → changelog absent).
+      this.enqueueSyncFor('payments', payId, 'CREATE', {
+        id: payId,
+        invoiceId: inv.id,
+        date: t,
+        amount,
+        method: method || 'cash',
+        reference: reference || null,
+        notes: notes || null,
+        tenantId: inv.tenantId,
+        createdBy: userId || null,
+        createdByName: userName || null,
+        createdAt: t,
+        legacy_id: payId,
+      }, inv.tenantId);
+      this.enqueueSync('UPDATE', invoiceId, { paidAmount: (inv.paidAmount || 0) + amount, legacy_id: invoiceId }, inv.tenantId);
     });
 
-    this.enqueueSyncFor('payments', payId, 'CREATE', {
-      id: payId,
-      invoiceId: inv.id,
-      date: t,
-      amount,
-      method: method || 'cash',
-      reference: reference || null,
-      notes: notes || null,
-      tenantId: inv.tenantId,
-      createdBy: userId || null,
-      createdByName: userName || null,
-      createdAt: t,
-      legacy_id: payId,
-    }, inv.tenantId);
-    this.enqueueSync('UPDATE', invoiceId, { paidAmount: (inv.paidAmount || 0) + amount, legacy_id: invoiceId }, inv.tenantId);
     return db.prepare('SELECT * FROM payments WHERE id = ?').get(payId) as any;
   }
 
@@ -418,10 +438,11 @@ export class InvoiceService extends BaseService {
     }
 
     const returnId = genId('ret');
-    const returnNumber = this.generateReturnNumber(inv.tenantId);
     const t = now();
 
     this.runInTransaction(() => {
+      // Numéro alloué dans la transaction (compteur persistant, S6).
+      const returnNumber = this.generateReturnNumber(inv.tenantId);
       db.prepare(`
         INSERT INTO returns (id, returnNumber, invoiceId, date, status, reason, tenantId, createdBy, createdByName, createdAt)
         VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)
@@ -446,10 +467,11 @@ export class InvoiceService extends BaseService {
         `).run(returnItem.id, returnItem.returnId, returnItem.invoiceItemId, returnItem.productId, returnItem.productName, returnItem.quantity, returnItem.price, returnItem.total, returnItem.reason);
         this.enqueueReturnItem(returnItem, inv.tenantId);
       }
+      // S2 : le retour est journalisé DANS la transaction de création.
+      this.enqueueSync('CREATE', returnId, { id: returnId, returnNumber, invoiceId, tenantId: inv.tenantId, legacy_id: returnId, _table: 'returns' }, inv.tenantId);
       this.addAuditLog(inv.id, 'RETURN_CREATED', `Retour ${returnNumber} créé`, userId, userName);
     });
 
-    this.enqueueSync('CREATE', returnId, { id: returnId, returnNumber, invoiceId, tenantId: inv.tenantId, legacy_id: returnId, _table: 'returns' }, inv.tenantId);
     const ret = db.prepare('SELECT * FROM returns WHERE id = ?').get(returnId) as any;
     const retItems = db.prepare('SELECT * FROM return_items WHERE returnId = ?').all(returnId);
     return { ...ret, items: retItems };
@@ -477,9 +499,10 @@ export class InvoiceService extends BaseService {
       }
       this.recalcInvoiceDeliveryStatus(ret.invoiceId);
       this.addAuditLog(ret.invoiceId, 'RETURN_VALIDATED', `Retour ${ret.returnNumber} validé - stock restitué`, userId, userName);
+      // S2 : le retour est journalisé DANS la transaction de validation.
+      this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, ret.tenantId);
     });
- 
-    this.enqueueSync('UPDATE', id, { status: 'validated', legacy_id: id }, ret.tenantId);
+
     return { ...ret, status: 'validated', validatedAt: t };
   }
 

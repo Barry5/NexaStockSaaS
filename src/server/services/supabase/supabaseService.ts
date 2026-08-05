@@ -1,4 +1,6 @@
 ﻿import { createClient } from '@supabase/supabase-js';
+import db from '../../database/db.js';
+import { NO_LEGACY_ID_TABLES, recordUuidMapping } from './transform.js';
 
 let adminClient: any = null;
 let anonClient: any = null;
@@ -183,6 +185,63 @@ export async function getChangesSinceByCreatedAt(
   }
 
   return query;
+}
+
+// Réalignement du mapping UUID local sur la réalité PostgreSQL AVANT le push.
+// Corrige les échecs "duplicate key value violates unique constraint
+// idx_*_legacy_id_unique" : quand sync_uuid_map n'a pas le mapping d'une ligne
+// déjà présente côté PG (ex: forfait seedé poussé depuis un autre appareil),
+// getOrCreateUuid fabriquait un NOUVEL uuid, ce qui transformait l'upsert
+// (onConflict: 'id') en INSERT en doublon de legacy_id. En enregistrant l'UUID
+// PG existant (SELECT id WHERE legacy_id = ?), l'upsert retombe sur un UPDATE.
+// Best-effort : en cas d'erreur réseau, le push échouera proprement et l'item
+// restera visible avec son last_error via /api/sync/failed.
+export async function ensureUuidMappingForPush(tableName: string, recordId: string): Promise<void> {
+  if (NO_LEGACY_ID_TABLES.has(tableName) || !recordId) return;
+  if (!isSupabaseConfigured()) return;
+  try {
+    const known = db.prepare(`SELECT 1 FROM sync_uuid_map WHERE sqlite_id = ?`).get(recordId);
+    if (known) return;
+    const client = getAdminClient();
+    const { data, error } = await client
+      .from(tableName)
+      .select('id')
+      .eq('legacy_id', recordId)
+      .maybeSingle();
+    if (!error && data?.id) {
+      recordUuidMapping(recordId, data.id as string);
+    }
+  } catch {
+    // best-effort : on laisse le retry borné / dead-letter gérer la récupération.
+  }
+}
+
+// Variante batch pour fullPush : récupère TOUS les mappings legacy_id -> id de
+// la table PG en une fois, afin que le batch upsert ne génère aucun doublon.
+export async function fetchUuidMappings(tableName: string): Promise<{ legacy_id: string; id: string }[] | null> {
+  try {
+    if (NO_LEGACY_ID_TABLES.has(tableName)) return null;
+    const client = getAdminClient();
+    const out: { legacy_id: string; id: string }[] = [];
+    let offset = 0;
+    const pageSize = 1000;
+    while (true) {
+      const { data, error } = await client
+        .from(tableName)
+        .select('legacy_id, id')
+        .range(offset, offset + pageSize - 1);
+      if (error) return null;
+      if (!data || data.length === 0) break;
+      for (const r of data) {
+        if (r?.legacy_id && r?.id) out.push({ legacy_id: r.legacy_id, id: r.id });
+      }
+      offset += data.length;
+      if (data.length < pageSize) break;
+    }
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 export async function countRemoteRows(

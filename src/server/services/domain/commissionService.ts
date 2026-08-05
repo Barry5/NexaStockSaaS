@@ -1,7 +1,7 @@
 ﻿import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { genId } from '../../utils/ids.js';
 
-function genId(p: string) { return `${p}-${Date.now()}-${Math.floor(Math.random() * 10000)}`; }
 function now() { return new Date().toISOString(); }
 
 export class CommissionService extends BaseService {

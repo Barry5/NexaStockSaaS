@@ -9,20 +9,113 @@ import { syncEngine } from '../sync/syncEngine.js';
 import { supabaseWorker } from '../sync/supabaseWorker.js';
 import * as SyncQueue from '../sync/syncQueue.js';
 import { SYNC_TABLES, SYNC_TABLE_SET } from '../sync/syncTables.js';
+import { TENANT_SCOPED_TABLES, CHILD_TENANT_PARENT, GLOBAL_TABLES, tenantWhereClause } from '../sync/tenantScope.js';
 
 const router = Router();
 
-// Helper: Compile complete DBState from SQLite
-export function compileCompleteState(): any {
+// ---------------------------------------------------------------------------
+// SCOPE TENANT (SEC-1/2/3/10 de l'audit) : toutes les lectures /sync sont
+// filtrées par le tenant de l'utilisateur (req.user.tenantId), et toutes les
+// écritures (push / full-state) sont validées/étampées avec ce tenant.
+// req.user.tenantId === null signifie superadmin → aucun filtre (tout visible).
+// Les règles de scope (TENANT_SCOPED_TABLES, CHILD_TENANT_PARENT,
+// GLOBAL_TABLES, tenantWhereClause) sont partagées avec syncEngine via
+// ../sync/tenantScope.ts.
+// ---------------------------------------------------------------------------
+
+// Valide/étampe les changements entrants avec le tenant de l'utilisateur.
+// Les changements illégitimes sont rejetés (jamais appliqués, jamais propagés).
+function scopeChangesForTenant(userTenantId: string | null, changes: any[]): { changes: any[]; rejected: string[] } {
+  if (!userTenantId) return { changes, rejected: [] }; // superadmin : aucun filtre
+  const scoped: any[] = [];
+  const rejected: string[] = [];
+
+  for (const c of changes) {
+    const table = c.table;
+    const d = c.data || {};
+
+    // Écriture sur une table globale/système : superadmin uniquement.
+    if (GLOBAL_TABLES.has(table)) {
+      rejected.push(`${table}/${c.recordId}`);
+      continue;
+    }
+
+    const rt = d.tenantId || d.tenant_id;
+    if (rt) {
+      if (rt !== userTenantId) {
+        rejected.push(`${table}/${c.recordId}`);
+      } else {
+        scoped.push(c);
+      }
+      continue;
+    }
+
+    if (TENANT_SCOPED_TABLES.has(table)) {
+      const existing = db.prepare(`SELECT tenantId FROM ${table} WHERE id = ?`).get(c.recordId) as { tenantId?: string } | undefined;
+      if (existing) {
+        if (existing.tenantId !== userTenantId) {
+          rejected.push(`${table}/${c.recordId}`);
+          continue;
+        }
+      } else if (c.operation !== 'DELETE') {
+        // Nouvelle ligne sans tenantId : étampée avec le tenant du token
+        // (un tenant ne peut pas créer une ligne sans tenant, ex. user global).
+        d.tenantId = userTenantId;
+      }
+      scoped.push(c);
+      continue;
+    }
+
+    const child = CHILD_TENANT_PARENT[table];
+    if (child) {
+      const parentId = d[child.column];
+      if (parentId) {
+        const parent = db.prepare(`SELECT tenantId FROM ${child.parent} WHERE id = ?`).get(parentId) as { tenantId?: string } | undefined;
+        if (!parent || parent.tenantId !== userTenantId) {
+          rejected.push(`${table}/${c.recordId}`);
+          continue;
+        }
+      } else if (c.operation === 'DELETE') {
+        const row = db.prepare(`SELECT ${child.column} AS parentId FROM ${table} WHERE id = ?`).get(c.recordId) as { parentId?: string } | undefined;
+        if (row?.parentId) {
+          const parent = db.prepare(`SELECT tenantId FROM ${child.parent} WHERE id = ?`).get(row.parentId) as { tenantId?: string } | undefined;
+          if (!parent || parent.tenantId !== userTenantId) {
+            rejected.push(`${table}/${c.recordId}`);
+            continue;
+          }
+        }
+      }
+      scoped.push(c);
+      continue;
+    }
+
+    // Table de sync non catégorisée : refusée (garde-fou).
+    rejected.push(`${table}/${c.recordId}`);
+  }
+
+  return { changes: scoped, rejected };
+}
+
+// Helper: Compile complete DBState from SQLite (scopé au tenant si défini)
+export function compileCompleteState(tenantId?: string | null): any {
+  const scope = tenantId || null; // null = superadmin (toutes les données)
+
   // 1. Tenants
-  const tenants = db.prepare('SELECT * FROM tenants').all() as any[];
+  const tenants = scope
+    ? db.prepare('SELECT * FROM tenants WHERE id = ?').all(scope) as any[]
+    : db.prepare('SELECT * FROM tenants').all() as any[];
   const formattedTenants = tenants.map(t => ({
     ...t,
     customCategories: JSON.parse(t.customCategories || '[]')
   }));
 
   // 2. Users
-  const users = db.prepare('SELECT id, name, email, role, tenantId, active, avatar, password, firstLoginReset FROM users').all() as any[];
+  // NOTE SEC-6 : le hash bcrypt `password` est conservé (le login hors-ligne du
+  // client SaaSAuth en dépend), mais il est désormais SCOPÉ au tenant de
+  // l'utilisateur — plus aucun hash d'un autre tenant n'est exposé.
+  const users = scope
+    ? db.prepare('SELECT id, name, email, role, tenantId, active, avatar, password, firstLoginReset FROM users WHERE tenantId = ?').all(scope) as any[]
+    : db.prepare('SELECT id, name, email, role, tenantId, active, avatar, password, firstLoginReset FROM users').all() as any[];
   const formattedUsers = users.map(u => ({
     ...u,
     active: !!u.active,
@@ -30,7 +123,9 @@ export function compileCompleteState(): any {
   }));
 
   // 3. Products
-  const products = db.prepare('SELECT * FROM products').all() as any[];
+  const products = scope
+    ? db.prepare('SELECT * FROM products WHERE tenantId = ?').all(scope) as any[]
+    : db.prepare('SELECT * FROM products').all() as any[];
   const formattedProducts = products.map(p => {
     const variants = db.prepare('SELECT * FROM product_variants WHERE productId = ?').all(p.id);
     return {
@@ -40,16 +135,24 @@ export function compileCompleteState(): any {
   });
 
   // 4. Customers
-  const customers = db.prepare('SELECT * FROM customers').all();
+  const customers = scope
+    ? db.prepare('SELECT * FROM customers WHERE tenantId = ?').all(scope)
+    : db.prepare('SELECT * FROM customers').all();
 
   // 5. Suppliers
-  const suppliers = db.prepare('SELECT * FROM suppliers').all();
+  const suppliers = scope
+    ? db.prepare('SELECT * FROM suppliers WHERE tenantId = ?').all(scope)
+    : db.prepare('SELECT * FROM suppliers').all();
 
   // 6. Expenses
-  const expenses = db.prepare('SELECT * FROM expenses').all();
+  const expenses = scope
+    ? db.prepare('SELECT * FROM expenses WHERE tenantId = ?').all(scope)
+    : db.prepare('SELECT * FROM expenses').all();
 
   // 7. Loans
-  const loans = db.prepare('SELECT * FROM loans').all() as any[];
+  const loans = scope
+    ? db.prepare('SELECT * FROM loans WHERE tenantId = ?').all(scope) as any[]
+    : db.prepare('SELECT * FROM loans').all() as any[];
   const formattedLoans = loans.map(l => {
     const repayments = db.prepare('SELECT * FROM repayments WHERE loanId = ?').all(l.id);
     const installments = db.prepare('SELECT * FROM loan_installments WHERE loanId = ?').all(l.id);
@@ -61,7 +164,9 @@ export function compileCompleteState(): any {
   });
 
   // 8. Sales
-  const sales = db.prepare('SELECT * FROM sales').all() as any[];
+  const sales = scope
+    ? db.prepare('SELECT * FROM sales WHERE tenantId = ?').all(scope) as any[]
+    : db.prepare('SELECT * FROM sales').all() as any[];
   const formattedSales = sales.map(s => {
     const items = db.prepare('SELECT * FROM sale_items WHERE saleId = ?').all(s.id) as any[];
     return {
@@ -79,17 +184,27 @@ export function compileCompleteState(): any {
   });
 
   // 9. Warehouses & Transfers
-  const warehouses = db.prepare('SELECT * FROM warehouses').all();
-  const transfers = db.prepare('SELECT * FROM stock_transfers').all();
+  const warehouses = scope
+    ? db.prepare('SELECT * FROM warehouses WHERE tenantId = ?').all(scope)
+    : db.prepare('SELECT * FROM warehouses').all();
+  const transfers = scope
+    ? db.prepare('SELECT * FROM stock_transfers WHERE tenantId = ?').all(scope)
+    : db.prepare('SELECT * FROM stock_transfers').all();
 
   // 10. Audit Logs
-  const auditLogs = db.prepare('SELECT * FROM audit_logs ORDER BY timestamp DESC').all();
+  const auditLogs = scope
+    ? db.prepare('SELECT * FROM audit_logs WHERE tenantId = ? ORDER BY timestamp DESC').all(scope)
+    : db.prepare('SELECT * FROM audit_logs ORDER BY timestamp DESC').all();
 
   // 11. Invoices
-  const subscriptionInvoices = db.prepare('SELECT * FROM subscription_invoices').all();
+  const subscriptionInvoices = scope
+    ? db.prepare('SELECT * FROM subscription_invoices WHERE tenantId = ?').all(scope)
+    : db.prepare('SELECT * FROM subscription_invoices').all();
 
-  // 12. Variants
-  const variants = db.prepare('SELECT * FROM product_variants').all();
+  // 12. Variants (scopés via les produits du tenant)
+  const variants = scope
+    ? db.prepare('SELECT * FROM product_variants WHERE productId IN (SELECT id FROM products WHERE tenantId = ?)').all(scope)
+    : db.prepare('SELECT * FROM product_variants').all();
 
   // 13. Pricing Plans
   const plans = db.prepare('SELECT * FROM pricing_plans ORDER BY displayOrder ASC').all() as any[];
@@ -101,7 +216,9 @@ export function compileCompleteState(): any {
   }));
 
   // 14. Payments
-  const subscriptionPayments = db.prepare('SELECT * FROM subscription_payments ORDER BY date DESC').all();
+  const subscriptionPayments = scope
+    ? db.prepare('SELECT * FROM subscription_payments WHERE tenantId = ? ORDER BY date DESC').all(scope)
+    : db.prepare('SELECT * FROM subscription_payments ORDER BY date DESC').all();
 
   // 15. Settings
   const settings = db.prepare('SELECT * FROM global_saas_settings WHERE id = 1').get() as any;
@@ -111,46 +228,66 @@ export function compileCompleteState(): any {
   } : null;
 
   // 16. Invoices (new ERP module)
-  const invoices = db.prepare('SELECT * FROM invoices ORDER BY date DESC').all() as any[];
+  const invoices = scope
+    ? db.prepare('SELECT * FROM invoices WHERE tenantId = ? ORDER BY date DESC').all(scope) as any[]
+    : db.prepare('SELECT * FROM invoices ORDER BY date DESC').all() as any[];
   const formattedInvoices = invoices.map(inv => {
     const items = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(inv.id);
     return { ...inv, items };
   });
 
   // 17. Delivery Orders
-  const deliveryOrders = db.prepare('SELECT * FROM delivery_orders ORDER BY createdAt DESC').all() as any[];
+  const deliveryOrders = scope
+    ? db.prepare('SELECT * FROM delivery_orders WHERE tenantId = ? ORDER BY createdAt DESC').all(scope) as any[]
+    : db.prepare('SELECT * FROM delivery_orders ORDER BY createdAt DESC').all() as any[];
   const formattedDOs = deliveryOrders.map(do_ => {
     const items = db.prepare('SELECT * FROM delivery_order_items WHERE deliveryOrderId = ?').all(do_.id);
     return { ...do_, items };
   });
 
   // 18. Payments
-  const payments = db.prepare('SELECT * FROM payments ORDER BY date DESC').all();
+  const payments = scope
+    ? db.prepare('SELECT * FROM payments WHERE tenantId = ? ORDER BY date DESC').all(scope)
+    : db.prepare('SELECT * FROM payments ORDER BY date DESC').all();
 
   // 19. Returns
-  const returns = db.prepare('SELECT * FROM returns ORDER BY createdAt DESC').all() as any[];
+  const returns = scope
+    ? db.prepare('SELECT * FROM returns WHERE tenantId = ? ORDER BY createdAt DESC').all(scope) as any[]
+    : db.prepare('SELECT * FROM returns ORDER BY createdAt DESC').all() as any[];
   const formattedReturns = returns.map(r => {
     const items = db.prepare('SELECT * FROM return_items WHERE returnId = ?').all(r.id);
     return { ...r, items };
   });
 
-  // 20. Invoice Audit Logs
-  const invoiceAuditLogs = db.prepare('SELECT * FROM invoice_audit_log ORDER BY timestamp DESC').all();
+  // 20. Invoice Audit Logs (scopés via les factures du tenant)
+  const invoiceAuditLogs = scope
+    ? db.prepare('SELECT * FROM invoice_audit_log WHERE invoiceId IN (SELECT id FROM invoices WHERE tenantId = ?) ORDER BY timestamp DESC').all(scope)
+    : db.prepare('SELECT * FROM invoice_audit_log ORDER BY timestamp DESC').all();
 
   // 21. Affiliates
-  const affiliates = db.prepare('SELECT * FROM affiliates ORDER BY createdAt DESC').all();
+  const affiliates = scope
+    ? db.prepare('SELECT * FROM affiliates WHERE tenantId = ? ORDER BY createdAt DESC').all(scope)
+    : db.prepare('SELECT * FROM affiliates ORDER BY createdAt DESC').all();
 
   // 22. Commission Rules
-  const commissionRules = db.prepare('SELECT * FROM commission_rules ORDER BY priority ASC').all();
+  const commissionRules = scope
+    ? db.prepare('SELECT * FROM commission_rules WHERE tenantId = ? ORDER BY priority ASC').all(scope)
+    : db.prepare('SELECT * FROM commission_rules ORDER BY priority ASC').all();
 
   // 23. Commission Ledger
-  const commissionLedger = db.prepare('SELECT * FROM commission_ledger ORDER BY createdAt DESC').all();
+  const commissionLedger = scope
+    ? db.prepare('SELECT * FROM commission_ledger WHERE tenantId = ? ORDER BY createdAt DESC').all(scope)
+    : db.prepare('SELECT * FROM commission_ledger ORDER BY createdAt DESC').all();
 
   // 24. Commission Payments
-  const commissionPayments = db.prepare('SELECT * FROM commission_payments ORDER BY createdAt DESC').all();
+  const commissionPayments = scope
+    ? db.prepare('SELECT * FROM commission_payments WHERE tenantId = ? ORDER BY createdAt DESC').all(scope)
+    : db.prepare('SELECT * FROM commission_payments ORDER BY createdAt DESC').all();
 
   // 25. Commission Audit
-  const commissionAudit = db.prepare('SELECT * FROM commission_audit ORDER BY createdAt DESC').all();
+  const commissionAudit = scope
+    ? db.prepare('SELECT * FROM commission_audit WHERE tenantId = ? ORDER BY createdAt DESC').all(scope)
+    : db.prepare('SELECT * FROM commission_audit ORDER BY createdAt DESC').all();
 
   return {
     tenants: formattedTenants,
@@ -242,16 +379,18 @@ export function buildStateChanges(clientState: Record<string, unknown>): any[] {
         version: typeof record.version === 'number' ? record.version : 1,
       });
 
-      // Enfants embarqués : delta + suppression des orphelins locaux
+      // Enfants embarqués : delta uniquement (CREATE/UPDATE). Aucune
+      // inférence de suppression des orphelins locaux : un snapshot client
+      // périmé/partiel ferait détruire des enfants créés par un autre
+      // appareil (donnée de B supprimée silencieusement, §2.3 audit). Les
+      // DELETEs enfants passent exclusivement par /api/sync/push (explicite).
       const children = EMBEDDED_CHILDREN[table];
       if (children) {
         for (const child of children) {
           const childRows = (record[child.field] as any[] | undefined) || [];
-          const childIds = new Set<string>();
           for (const childRow of childRows) {
             if (!childRow) continue;
             const childId = childRow.id || `${record.id}-item-${childRows.indexOf(childRow)}`;
-            childIds.add(childId);
             const childExists = db.prepare(`SELECT id FROM ${child.childTable} WHERE id = ?`).get(childId) !== undefined;
             changes.push({
               table: child.childTable,
@@ -260,12 +399,6 @@ export function buildStateChanges(clientState: Record<string, unknown>): any[] {
               data: { ...childRow, id: childId, [child.parentColumn]: record.id },
               version: typeof childRow.version === 'number' ? childRow.version : 1,
             });
-          }
-          const localChildren = db.prepare(`SELECT id FROM ${child.childTable} WHERE ${child.parentColumn} = ?`).all(record.id) as { id: string }[];
-          for (const local of localChildren) {
-            if (!childIds.has(local.id)) {
-              changes.push({ table: child.childTable, recordId: local.id, operation: 'DELETE', data: { id: local.id }, version: 1 });
-            }
           }
         }
       }
@@ -281,22 +414,29 @@ export function buildStateChanges(clientState: Record<string, unknown>): any[] {
   return changes;
 }
 
-// GET /api/sync/changes?since=ISO_TIMESTAMP - Delta sync endpoint
+// GET /api/sync/changes?since=ISO_TIMESTAMP - Delta sync endpoint (scopé tenant)
 router.get('/changes', authenticateToken, (req: AuthenticatedRequest, res, next) => {
   try {
     const since = req.query.since as string;
     if (!since) return res.status(400).json({ error: 'Paramètre since requis (ISO timestamp).' });
+
+    const tenantId = req.user?.tenantId ?? null;
 
     const changes: Record<string, any[]> = {};
     for (const table of SYNC_TABLES) {
       const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
       const hasUpdatedAt = tableInfo.some(c => c.name === 'updatedAt');
       const hasCreatedAt = tableInfo.some(c => c.name === 'createdAt');
+      const scope = tenantId ? tenantWhereClause(table, tenantId) : null;
 
       if (hasUpdatedAt) {
-        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE updatedAt >= ?`).all(since) as any[];
+        changes[table] = scope
+          ? db.prepare(`SELECT * FROM ${table} WHERE updatedAt >= ? AND ${scope.clause}`).all(since, ...scope.params) as any[]
+          : db.prepare(`SELECT * FROM ${table} WHERE updatedAt >= ?`).all(since) as any[];
       } else if (hasCreatedAt) {
-        changes[table] = db.prepare(`SELECT * FROM ${table} WHERE createdAt >= ?`).all(since) as any[];
+        changes[table] = scope
+          ? db.prepare(`SELECT * FROM ${table} WHERE createdAt >= ? AND ${scope.clause}`).all(since, ...scope.params) as any[]
+          : db.prepare(`SELECT * FROM ${table} WHERE createdAt >= ?`).all(since) as any[];
       } else {
         changes[table] = [];
       }
@@ -333,14 +473,19 @@ router.post('/reset-from-cloud', authenticateToken, requireRole(['superadmin']),
   }
 });
 
-// GET /api/sync/reset-app?key=nexastock-reset-2026
-// ONE-CLICK reset — clear local + pull from Supabase (superadmin only)
-const RESET_KEY = process.env.RESET_KEY || 'nexastock-reset-2026';
+// GET /api/sync/reset-app?key=<RESET_KEY>
+// ONE-CLICK reset — clear local + pull from Supabase (superadmin only).
+// SEC-5 (audit) : plus AUCUNE clé par défaut en code. La clé doit être fournie
+// via la variable d'environnement RESET_KEY ; à défaut, l'endpoint est désactivé.
+const RESET_KEY = process.env.RESET_KEY;
 router.get('/reset-app', authenticateToken, requireRole(['superadmin']), (req, res) => {
   try {
+    if (!RESET_KEY) {
+      return res.status(503).json({ error: 'RESET_KEY non configurée dans l\'environnement. Réinitialisation désactivée.' });
+    }
     const key = req.query.key as string;
     if (key !== RESET_KEY) {
-      return res.status(403).json({ error: 'Clé de réinitialisation invalide. Utilisez ?key=nexastock-reset-2026' });
+      return res.status(403).json({ error: 'Clé de réinitialisation invalide.' });
     }
 
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'sync_%'`).all() as { name: string }[];
@@ -566,30 +711,30 @@ router.post('/trigger', authenticateToken, requireRole(['superadmin']), async (r
   }
 });
 
-// GET: Compile and return full DB state
+// GET: Compile and return full DB state (scopé au tenant de l'utilisateur)
 router.get('/', authenticateToken, (req: AuthenticatedRequest, res, next) => {
   try {
-    const state = compileCompleteState();
+    const state = compileCompleteState(req.user?.tenantId ?? null);
     res.json(state);
   } catch (error) {
     next(error);
   }
 });
 
-// GET /api/sync/pull?since=ISO_TIMESTAMP - Incremental pull (changes + deletions)
+// GET /api/sync/pull?since=ISO_TIMESTAMP - Incremental pull (changes + deletions, scopé tenant)
 router.get('/pull', authenticateToken, (req: AuthenticatedRequest, res, next) => {
   try {
     const since = req.query.since as string;
     if (!since) return res.status(400).json({ error: 'Paramètre since requis (ISO timestamp).' });
     const tableName = req.query.table as string | undefined;
-    const result = syncEngine.pullChanges(since, tableName);
+    const result = syncEngine.pullChanges(since, tableName, req.user?.tenantId ?? null);
     res.json(result);
   } catch (error) {
     next(error);
   }
 });
 
-// POST /api/sync/push - Incremental push with conflict resolution
+// POST /api/sync/push - Incremental push with conflict resolution (tenant validé)
 router.post('/push', authenticateToken, async (req: AuthenticatedRequest, res, next) => {
   try {
     const { changes } = req.body;
@@ -597,10 +742,17 @@ router.post('/push', authenticateToken, async (req: AuthenticatedRequest, res, n
       return res.status(400).json({ error: 'Format invalide. Attendu: { changes: [...] }' });
     }
 
-    const tenantId = req.user?.tenantId;
+    const tenantId = req.user?.tenantId ?? null;
     const deviceId = req.headers['x-device-id'] as string || 'server';
 
-    const result = syncEngine.pushChanges(changes.map((c: any) => ({
+    // SEC-2/10 : les changements d'un autre tenant (ou de tables globales pour
+    // un tenant) sont rejetés avant toute écriture locale.
+    const scoped = scopeChangesForTenant(tenantId, changes);
+    if (scoped.rejected.length > 0) {
+      console.warn(`[SYNC PUSH] ${scoped.rejected.length} changement(s) rejetés (tenant/global): ${scoped.rejected.slice(0, 5).join(', ')}${scoped.rejected.length > 5 ? '…' : ''}`);
+    }
+
+    const result = syncEngine.pushChanges(scoped.changes.map((c: any) => ({
       table: c.table,
       recordId: c.recordId,
       operation: c.operation,
@@ -641,11 +793,17 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res, next)
     //  - plus d'INSERT OR REPLACE bruts qui effaçaient des colonnes
     //    (version, updatedAt, sync_status) sans rien journaliser.
     const stateChanges = buildStateChanges(clientState as Record<string, unknown>);
+    // SEC-2/10 : scope tenant (rejet des tables globales et records d'autres
+    // tenants) avant toute écriture locale.
+    const scoped = scopeChangesForTenant(req.user?.tenantId ?? null, stateChanges);
+    if (scoped.rejected.length > 0) {
+      console.warn(`[SYNC POST] ${scoped.rejected.length} changement(s) rejetés (tenant/global): ${scoped.rejected.slice(0, 5).join(', ')}${scoped.rejected.length > 5 ? '…' : ''}`);
+    }
     let applied = 0;
     let conflicts = 0;
     let mergeErrors: string[] = [];
-    if (stateChanges.length > 0) {
-      const pushResult = syncEngine.pushChanges(stateChanges);
+    if (scoped.changes.length > 0) {
+      const pushResult = syncEngine.pushChanges(scoped.changes);
       applied = pushResult.applied;
       conflicts = pushResult.conflicts.length;
       mergeErrors = pushResult.errors.map(e => `${e.table}/${e.recordId}: ${e.error}`);
@@ -663,12 +821,13 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res, next)
       const deleteChanges = explicitDeletions
         .filter((d: any) => d && typeof d.table === 'string' && typeof d.recordId === 'string')
         .map((d: any) => ({ table: d.table, recordId: d.recordId, operation: 'DELETE' as const, data: { id: d.recordId }, version: 1 }));
-      const deleteResult = syncEngine.pushChanges(deleteChanges);
+      const scopedDeletions = scopeChangesForTenant(req.user?.tenantId ?? null, deleteChanges);
+      const deleteResult = syncEngine.pushChanges(scopedDeletions.changes);
       deletionPushed = deleteResult.applied;
     }
 
     // Compile and return the merged consolidated state back to the client
-    const consolidatedState = compileCompleteState();
+    const consolidatedState = compileCompleteState(req.user?.tenantId ?? null);
     res.json(consolidatedState);
 
     if (applied > 0 || conflicts > 0 || deletionPushed > 0) {

@@ -1,5 +1,6 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { genId } from '../../utils/ids.js';
 
 const EXPENSE_COLUMNS = [
   { sqlite: 'id', pg: 'legacy_id' },
@@ -29,7 +30,7 @@ export class ExpenseService extends BaseService {
   }
 
   create(data: any, tenantId: string): any {
-    const id = data.id || `e-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const id = data.id || genId('e');
 
     const expense = {
       id,

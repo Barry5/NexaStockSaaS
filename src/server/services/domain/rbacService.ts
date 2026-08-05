@@ -1,6 +1,7 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
 import { getUserPermissions, getUserRoles } from '../../middleware/permissions.js';
+import { genId } from '../../utils/ids.js';
 
 export class RbacService extends BaseService {
   constructor() {
@@ -72,7 +73,7 @@ export class RbacService extends BaseService {
   createRole(name: string, label: string, description: string | undefined, tenantId: string): any {
     const existing = db.prepare('SELECT id FROM roles WHERE name = ? AND tenantId = ?').get(name, tenantId) as any;
     if (existing) throw new Error('Un rôle avec ce nom existe déjà.');
-    const roleId = `role-custom-${Date.now()}`;
+    const roleId = genId('role-custom');
     const now = new Date().toISOString();
     db.prepare('INSERT INTO roles (id, name, label, description, is_system, tenantId, createdAt) VALUES (?, ?, ?, ?, 0, ?, ?)').run(
       roleId, name, label, description || null, tenantId, now

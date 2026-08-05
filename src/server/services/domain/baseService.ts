@@ -1,6 +1,5 @@
 import db from '../../database/db.js';
 import { syncEngine } from '../../sync/syncEngine.js';
-import { syncService } from '../../sync/syncService.js';
 import type { SyncOperation } from '../../sync/syncQueue.js';
 
 export interface ColumnMap {
@@ -60,12 +59,10 @@ export abstract class BaseService {
 
   protected enqueueSyncFor(tableName: string, recordId: string, operation: SyncOperation, payload: Record<string, unknown>, companyId?: string, deviceId?: string): void {
     // Pipeline unique (Phase 1) : journalise dans sync_changelog (retry borné,
-    // dead-letter) au lieu de sync_queue. Le push est déclenché par le
-    // SupabaseWorker ; on force un cycle immédiat quand on est en ligne.
+    // dead-letter) au lieu de sync_queue. Le SupabaseWorker (15 s) est l'UNIQUE
+    // planificateur : plus de syncUpFromChangelog fire-and-forget ici, ce qui
+    // élimine la course double-push entre le worker et l'appelant (§6.2 audit).
     syncEngine.logChange(tableName, recordId, operation, payload, companyId, deviceId);
-    if (syncService.isOnline()) {
-      syncService.syncUpFromChangelog().catch(() => {});
-    }
   }
 
   protected getAllRaw<T = any>(tenantId: string, orderBy = ''): T[] {

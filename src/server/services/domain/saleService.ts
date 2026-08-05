@@ -1,5 +1,12 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { randomUUID } from 'crypto';
+
+// UUID v4 (audit §2.6, P7) : les IDs précédents (Date.now()+random) pouvaient
+// entrer en collision à la même milliseconde entre appareils.
+function genId(prefix: string) {
+  return `${prefix}-${randomUUID()}`;
+}
 
 const SALE_COLUMNS = [
   { sqlite: 'id', pg: 'legacy_id' },
@@ -39,9 +46,9 @@ export class SaleService extends BaseService {
   }
 
   create(data: any, tenantId: string, userId: string, userName: string): any {
-    const saleId = data.id || `sa-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const saleId = data.id || genId('sa');
 
-    const result = this.runInTransaction(() => {
+    this.runInTransaction(() => {
       db.prepare(`
         INSERT INTO sales (id, invoiceNumber, date, subtotal, tax, taxRate, discount, total, paymentMethod, customerId, customerName, tenantId, employeeId, employeeName)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -63,7 +70,7 @@ export class SaleService extends BaseService {
       );
 
       for (const item of data.items) {
-        const saleItemId = `${saleId}-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const saleItemId = genId('saitm');
         const product = db.prepare('SELECT quantity, name FROM products WHERE id = ? AND tenantId = ?').get(item.productId, tenantId) as { quantity: number; name: string } | undefined;
         const productName = item.productName || product?.name || 'Produit inconnu';
 
@@ -107,7 +114,7 @@ export class SaleService extends BaseService {
         }
       }
 
-      const auditId = `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const auditId = genId('aud');
       db.prepare(`
         INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -131,10 +138,13 @@ export class SaleService extends BaseService {
         legacy_id: auditId,
       }, tenantId);
 
+      // S2 : la vente est journalisée DANS la transaction (avant : après
+      // runInTransaction → fenêtre de crash → ligne sans changelog → jamais
+      // poussée, puis détruite par la réconciliation).
+      this.enqueueSync('CREATE', saleId, { id: saleId, ...data, legacy_id: saleId }, tenantId);
+
       return { id: saleId, ...data };
     });
-
-    this.enqueueSync('CREATE', saleId, { ...result, legacy_id: saleId }, tenantId);
 
     return this.getById(saleId);
   }
@@ -163,7 +173,7 @@ export class SaleService extends BaseService {
  
       db.prepare('DELETE FROM sales WHERE id = ? AND tenantId = ?').run(id, tenantId);
 
-      const auditId = `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const auditId = genId('aud');
       db.prepare(`
         INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -186,9 +196,10 @@ export class SaleService extends BaseService {
         tenantId,
         legacy_id: auditId,
       }, tenantId);
+      // S2 : la suppression est journalisée DANS la transaction.
+      this.enqueueSync('DELETE', id, { ...sale, legacy_id: id }, tenantId);
     });
 
-    this.enqueueSync('DELETE', id, { ...sale, legacy_id: id }, tenantId);
     return true;
   }
 }

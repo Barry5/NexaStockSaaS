@@ -1,6 +1,7 @@
 ﻿import db from '../database/db.js';
 import { v4 as uuidv4 } from 'uuid';
 import { SYNC_TABLE_SET, SYNC_TABLES, tablePriorityCase } from './syncTables.js';
+import { tenantWhereClause } from './tenantScope.js';
 
 // Nombre maximal de tentatives de push d'une entrée du changelog avant de la
 // passer en dead-letter (status = 'dead'). Visible via /api/sync/failed.
@@ -239,7 +240,10 @@ export class SyncEngine {
     return result;
   }
 
-  pullChanges(since: string, tableName?: string): PullResult {
+  // Pull client. `tenantScope` (tenantId de l'utilisateur, null = superadmin) :
+  // chaque table est filtrée par tenant (colonne directe ou via le parent),
+  // les tables globales restent partagées (config SaaS / RBAC).
+  pullChanges(since: string, tableName?: string, tenantScope?: string | null): PullResult {
     const result: PullResult = { changes: {}, deletions: {}, timestamp: new Date().toISOString() };
     const tables = tableName ? [tableName] : SYNC_TABLES;
 
@@ -249,11 +253,14 @@ export class SyncEngine {
         const colNames = cols.map(c => c.name);
         const hasUpdatedAt = colNames.includes('updatedAt');
         const hasCreatedAt = colNames.includes('createdAt');
+        const scope = tenantScope ? tenantWhereClause(table, tenantScope) : null;
+        const scopeSql = scope && scope.clause ? ` AND ${scope.clause}` : '';
+        const scopeParams = scope?.params ?? [];
 
         if (hasUpdatedAt) {
-          result.changes[table] = db.prepare(`SELECT * FROM ${table} WHERE updatedAt >= ?`).all(since);
+          result.changes[table] = db.prepare(`SELECT * FROM ${table} WHERE updatedAt >= ?${scopeSql}`).all(since, ...scopeParams);
         } else if (hasCreatedAt) {
-          result.changes[table] = db.prepare(`SELECT * FROM ${table} WHERE createdAt >= ?`).all(since);
+          result.changes[table] = db.prepare(`SELECT * FROM ${table} WHERE createdAt >= ?${scopeSql}`).all(since, ...scopeParams);
         } else {
           result.changes[table] = [];
         }
@@ -297,13 +304,14 @@ export class SyncEngine {
     db.prepare(`UPDATE sync_changelog SET pushed_to_supabase = 1, status = 'pushed' WHERE id IN (${placeholders})`).run(...ids);
   }
 
-  markChangeFailed(changeId: string) {
+  markChangeFailed(changeId: string, error?: string) {
     db.prepare(`
       UPDATE sync_changelog
       SET retry_count = retry_count + 1,
-          status = CASE WHEN retry_count + 1 >= max_retries THEN 'dead' ELSE 'failed' END
+          status = CASE WHEN retry_count + 1 >= max_retries THEN 'dead' ELSE 'failed' END,
+          last_error = ?
       WHERE id = ?
-    `).run(changeId);
+    `).run(error ? String(error).slice(0, 2000) : null, changeId);
   }
 
   resetDeadChanges(tableName?: string): number {
@@ -321,7 +329,7 @@ export class SyncEngine {
 
   getDeadChanges(limit: number = 200): any[] {
     return db.prepare(`
-      SELECT id, table_name, record_id, operation, retry_count, max_retries, status, created_at, company_id, device_id
+      SELECT id, table_name, record_id, operation, retry_count, max_retries, status, last_error, created_at, company_id, device_id
       FROM sync_changelog
       WHERE status = 'dead'
       ORDER BY created_at ASC
@@ -338,6 +346,18 @@ export class SyncEngine {
     const row = db.prepare(`
       SELECT COUNT(*) as count FROM sync_changelog
       WHERE table_name = ? AND pushed_to_supabase = 0 AND status != 'dead'
+    `).get(tableName) as { count: number };
+    return row.count > 0;
+  }
+
+  // Vrai si la table possède ≥ 1 changement en dead-letter non purgé. La
+  // réconciliation s'en sert pour NE JAMAIS purger localement une ligne dont
+  // le push a échoué définitivement (max_retries atteint) : la « réparation »
+  // détruirait une donnée légitime intacte dans la dead-letter (§2.1 audit).
+  hasDeadChangesForTable(tableName: string): boolean {
+    const row = db.prepare(`
+      SELECT COUNT(*) as count FROM sync_changelog
+      WHERE table_name = ? AND status = 'dead'
     `).get(tableName) as { count: number };
     return row.count > 0;
   }

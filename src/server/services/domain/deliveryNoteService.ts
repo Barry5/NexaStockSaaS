@@ -1,7 +1,8 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { genId } from '../../utils/ids.js';
+import { nextCounter } from '../../utils/counters.js';
 
-function genId(p: string) { return `${p}-${Date.now()}-${Math.floor(Math.random() * 10000)}`; }
 function now() { return new Date().toISOString(); }
 function today() { return now().split('T')[0]; }
 
@@ -10,9 +11,10 @@ export class DeliveryNoteService extends BaseService {
     super('delivery_orders', 'delivery_orders', []);
   }
 
+  // Compteur persistant partagé avec invoiceService (type 'BL' commun) :
+  // un seul séquence pour toutes les sources de Bons de Livraison (S6).
   private generateNumber(tenantId: string): string {
-    const c = db.prepare('SELECT COUNT(*) as cnt FROM delivery_orders WHERE tenantId = ?').get(tenantId) as any;
-    return `BL-${new Date().getFullYear()}-${String((c?.cnt || 0) + 1).padStart(4, '0')}`;
+    return nextCounter(tenantId, 'BL', 'BL');
   }
 
   private addAudit(dnId: string, action: string, desc: string, tenantId: string, userId?: string, userName?: string) {

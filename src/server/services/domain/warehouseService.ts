@@ -1,5 +1,6 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { genId } from '../../utils/ids.js';
 
 const WAREHOUSE_COLUMNS = [
   { sqlite: 'id', pg: 'legacy_id' },
@@ -39,7 +40,7 @@ export class WarehouseService extends BaseService {
   }
 
   create(data: any, tenantId: string): any {
-    const id = data.id || `wh-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const id = data.id || genId('wh');
 
     const warehouse = {
       id,
@@ -78,7 +79,7 @@ export class WarehouseService extends BaseService {
   }
 
   createTransfer(data: any, tenantId: string, userId: string, userName: string): any {
-    const id = data.id || `tr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const id = data.id || genId('tr');
 
     const transfer = {
       id,
@@ -97,7 +98,7 @@ export class WarehouseService extends BaseService {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(...TRANSFER_COLUMNS.map(m => transfer[m.sqlite]));
 
-    const auditId = `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const auditId = genId('aud');
     db.prepare(`
       INSERT INTO audit_logs (id, timestamp, userId, userName, action, details, tenantId)
       VALUES (?, ?, ?, ?, ?, ?, ?)

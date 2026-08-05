@@ -57,9 +57,6 @@ describe('Analyse de scénarios de synchronisation', () => {
       features: [], limits: {}, color: 'red', displayOrder: 99, active: true,
     });
 
-    // Laisser le push immédiat du CREATE (fire-and-forget) se terminer
-    await new Promise(r => setTimeout(r, 100));
-
     // Vider le changelog de synchro pour isoler notre test
     db.prepare('DELETE FROM sync_changelog').run();
     mockBatchUpsert.mockClear();
@@ -67,16 +64,17 @@ describe('Analyse de scénarios de synchronisation', () => {
     // 2. Action: Mettre à jour le prix du forfait
     pricingPlanService.update(plan.id, { price: 99.99 });
 
-    // Le service déclenche un push immédiat (fire-and-forget, Phase 1) :
-    // attendre qu'il se termine puis vérifier ce qui est parti.
-    await new Promise(r => setTimeout(r, 100));
+    // Le déclenchement du push est désormais la prérogative EXCLUSIVE du
+    // SupabaseWorker (S4 : suppression du fire-and-forget dans enqueueSyncFor).
+    // On joue le rôle du worker pour vérifier ce qui part vers Supabase.
+    await syncService.syncUpFromChangelog();
 
     // 3. Analyse: Vérifier que l'action est bien journalisée dans le changelog
     const changeItem = db.prepare(`SELECT * FROM sync_changelog WHERE record_id = ?`).get(plan.id);
     expect(changeItem).toBeDefined();
     expect(changeItem.operation).toBe('UPDATE');
 
-    // 4. Vérification: Analyser les données envoyées à Supabase par le push immédiat
+    // 4. Vérification: Analyser les données envoyées à Supabase par le push
     expect(mockBatchUpsert).toHaveBeenCalledOnce();
     const [table, records] = mockBatchUpsert.mock.calls[0];
     expect(table).toBe('pricing_plans');
@@ -108,8 +106,9 @@ describe('Analyse de scénarios de synchronisation', () => {
     const existingUser = db.prepare('SELECT id, name FROM users WHERE role = ? LIMIT 1').get('superadmin') as any;
     const sale = saleService.create(saleInput, tenantId, existingUser.id, existingUser.name);
 
-    // 3. Action: Laisser le push immédiat (fire-and-forget, Phase 1) se terminer
-    await new Promise(r => setTimeout(r, 300));
+    // 3. Action: Le SupabaseWorker est l'unique déclencheur du push (S4) :
+    // on joue son rôle pour vérifier le cycle complet.
+    await syncService.syncUpFromChangelog();
 
     // 4. Analyse: Vérifier les appels à Supabase (toutes tables confondues)
     expect(mockBatchUpsert.mock.calls.some(call => call[0] === 'sales')).toBe(true);

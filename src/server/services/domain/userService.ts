@@ -1,6 +1,7 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
 import { hashPassword as hashPw } from '../auth.js';
+import { genId } from '../../utils/ids.js';
 
 const USER_COLUMNS = [
   { sqlite: 'id', pg: 'legacy_id' },
@@ -31,7 +32,7 @@ export class UserService extends BaseService {
   }
 
   async create(data: any, tenantId: string): Promise<any> {
-    const id = data.id || `u-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const id = data.id || genId('u');
 
     const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(data.email);
     if (existing) {

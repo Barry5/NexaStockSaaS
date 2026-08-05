@@ -1,5 +1,5 @@
 ﻿import db from '../database/db.js';
-import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, getChangesSinceByCreatedAt, countRemoteRows, fetchAllLegacyIds, type PullCursor } from '../services/supabase/supabaseService.js';
+import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, getChangesSinceByCreatedAt, countRemoteRows, fetchAllLegacyIds, ensureUuidMappingForPush, fetchUuidMappings, type PullCursor } from '../services/supabase/supabaseService.js';
 import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria, recordUuidMapping, NO_LEGACY_ID_TABLES } from '../services/supabase/transform.js';
 import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
@@ -109,13 +109,16 @@ class SyncService {
         if (change.operation === 'DELETE') {
           await this.deleteFromRemote(change.table, change.recordId);
         } else {
+          // Réaligner le mapping UUID sur la ligne PG existante AVANT le push
+          // (évite les doublons de legacy_id quand sync_uuid_map est incomplet).
+          await ensureUuidMappingForPush(change.table, change.recordId);
           const record = this.getCurrentRecordForPush(change.table, change.recordId, change.data);
           await this.upsertToRemote(change.table, record);
         }
         pushed++;
         pushedIds.push(change.changeId);
       } catch (err: any) {
-        syncEngine.markChangeFailed(change.changeId);
+        syncEngine.markChangeFailed(change.changeId, err?.message);
         failed++;
         errors.push(`${change.table}/${change.recordId}: ${err.message}`);
       }
@@ -310,6 +313,17 @@ class SyncService {
 
         if (records.length === 0) continue;
 
+        // Réaligner les mappings legacy_id -> id pour TOUTES les lignes déjà
+        // présentes côté PG : sans cela, l'upsert (onConflict: 'id') générerait
+        // des doublons de legacy_id (unique index migration 002) pour toute
+        // ligne locale dont sync_uuid_map est incomplet.
+        if (!NO_LEGACY_ID_TABLES.has(mapping.sqliteName)) {
+          const uuidMappings = await fetchUuidMappings(mapping.pgName);
+          if (uuidMappings) {
+            for (const m of uuidMappings) recordUuidMapping(m.legacy_id, m.id);
+          }
+        }
+
         const pgRecords = records.map(r => transformToPostgres(mapping.sqliteName, r));
         const result = await batchUpsert(mapping.pgName, pgRecords, getConflictColumn(mapping.pgName));
         totalPushed += result.success;
@@ -430,6 +444,11 @@ class SyncService {
       if (NO_LEGACY_ID_TABLES.has(mapping.sqliteName)) continue;
       // Ne jamais réconcilier une table avec des changements locaux non poussés.
       if (syncEngine.hasPendingChangesForTable(mapping.sqliteName)) continue;
+      // …NI une table avec des changements en dead-letter non résolus : la
+      // purge de lignes locales absentes de PG détruirait des données
+      // légitimes dont le push a simplement échoué (max_retries atteint).
+      // Seul un rejeu manuel (/api/sync/retry-failed) débloque la table.
+      if (syncEngine.hasDeadChangesForTable(mapping.sqliteName)) continue;
 
       try {
         checked++;

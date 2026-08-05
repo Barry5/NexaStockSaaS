@@ -19,7 +19,8 @@ const mockGetAdminClient = vitest.fn(() => ({ from: mockFrom }));
 const mockCheckConnection = vitest.fn(async () => true);
 const mockIsConfigured = vitest.fn(() => true);
 
-vitest.mock('../services/supabase/supabaseService.js', () => ({
+vitest.mock('../services/supabase/supabaseService.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   isSupabaseConfigured: mockIsConfigured,
   checkConnection: mockCheckConnection,
   batchUpsert: mockBatchUpsert,

@@ -1,5 +1,6 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { genId } from '../../utils/ids.js';
 
 export interface PricingPlanInput {
   name?: string;
@@ -14,8 +15,8 @@ export interface PricingPlanInput {
   active?: boolean;
 }
 
-function genId(): string {
-  return `plan-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+function genPlanId(): string {
+  return genId('plan');
 }
 
 function parsePlanRow(row: any): any {
@@ -45,7 +46,7 @@ export class PricingPlanService extends BaseService {
   }
 
   create(data: PricingPlanInput): any {
-    const id = data.name ? genId() : genId();
+    const id = genId('plan');
     const now = new Date().toISOString();
     const name = data.name || 'Nouveau forfait';
     const price = Number(data.price) || 0;

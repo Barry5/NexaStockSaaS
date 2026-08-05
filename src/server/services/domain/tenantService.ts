@@ -1,7 +1,7 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
+import { genId } from '../../utils/ids.js';
 
-function genId(p: string) { return `${p}-${Date.now()}-${Math.floor(Math.random() * 10000)}`; }
 function now() { return new Date().toISOString(); }
 
 function hashPassword(pw: string): string {
@@ -68,7 +68,7 @@ export class TenantService extends BaseService {
   createTenant(data: any): any {
     const { name, email, plan, phone, address, city, country, currency } = data;
     if (!name || !email) throw new Error('Nom et email requis');
-    const tenantId = `tenant-${Date.now()}`;
+    const tenantId = genId('tenant');
     const userId = genId('user');
     const password = generatePassword();
     const hashed = hashPassword(password);
@@ -213,7 +213,7 @@ export class TenantService extends BaseService {
   createPayment(data: any, user: { id: string; name: string; tenantId: string }): any {
     const tenantId = user.tenantId;
     const { planId, planName, amount, currency, paymentMethod, reference, transactionNumber, comment, receiptImage } = data;
-    const id = `pm-${Date.now()}`;
+    const id = genId('pm');
     const date = new Date().toISOString().split('T')[0];
     const timestamp = new Date().toISOString();
     const activeTenant = db.prepare('SELECT name FROM tenants WHERE id = ?').get(tenantId) as { name: string };
@@ -241,7 +241,7 @@ export class TenantService extends BaseService {
         const endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
         db.prepare('UPDATE tenants SET plan = ?, subscriptionStatus = \'ACTIVE\', subscriptionStartDate = ?, subscriptionEndDate = ?, subscriptionPlanId = ? WHERE id = ?')
           .run(payment.planName, startDate, endDate, payment.planId, payment.tenantId);
-        const invId = `inv-${Date.now()}`;
+        const invId = genId('inv');
         db.prepare('INSERT INTO subscription_invoices (id, invoiceNumber, date, amount, plan, status, tenantId) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(invId, `INV-${Date.now()}`, startDate.split('T')[0], payment.amount, payment.planName, 'paye', payment.tenantId);
         this.enqueueSyncFor('subscription_invoices', invId, 'CREATE', {

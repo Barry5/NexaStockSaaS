@@ -1,6 +1,7 @@
 import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
 import { getTenantAvailableModules } from '../../middleware/tenantAccess.js';
+import { genId } from '../../utils/ids.js';
 
 const MODULE_COLUMNS = [
   { sqlite: 'id', pg: 'legacy_id' },
@@ -25,9 +26,8 @@ export class ModuleService extends BaseService {
   setPlanModules(planId: string, moduleKeys: string[]): any[] {
     db.prepare('DELETE FROM plan_modules WHERE planId = ?').run(planId);
     const insert = db.prepare('INSERT INTO plan_modules (id, planId, moduleKey, enabled) VALUES (?, ?, ?, 1)');
-    const now = Date.now();
     for (let i = 0; i < moduleKeys.length; i++) {
-      insert.run(`pm-${now}-${i}`, planId, moduleKeys[i]);
+      insert.run(genId('pm'), planId, moduleKeys[i]);
     }
     return this.getPlanModules(planId);
   }
@@ -42,7 +42,7 @@ export class ModuleService extends BaseService {
       db.prepare('UPDATE tenant_modules SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, existing.id);
       this.enqueueSyncFor('tenant_modules', existing.id, 'UPDATE', { id: existing.id, tenantId, moduleKey, enabled }, tenantId);
     } else {
-      const id = `tm-${Date.now()}`;
+      const id = genId('tm');
       db.prepare('INSERT INTO tenant_modules (id, tenantId, moduleKey, enabled) VALUES (?, ?, ?, ?)').run(
         id, tenantId, moduleKey, enabled ? 1 : 0
       );
