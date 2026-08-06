@@ -4,6 +4,7 @@ import {
   markFailed, setMeta, getMeta, removeMeta,
   getAllPending, getPendingCount as dexiePendingCount, clearCompleted, retryFailed as dexieRetryFailed,
 } from '../lib/syncQueue';
+import { CLIENT_FIELD_TO_TABLE, CLIENT_ARRAY_FIELDS } from '../shared/syncMappings';
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem('nexastock_token');
@@ -157,23 +158,9 @@ export async function pullChanges(since: string): Promise<PullResult> {
   return res.json() as Promise<PullResult>;
 }
 
-const FIELD_TO_TABLE: Record<string, string> = {
-  tenants: 'tenants', users: 'users', products: 'products', customers: 'customers',
-  suppliers: 'suppliers', expenses: 'expenses', loans: 'loans',
-  warehouses: 'warehouses', transfers: 'stock_transfers',
-  auditLogs: 'audit_logs', subscriptionInvoices: 'subscription_invoices',
-  variants: 'product_variants', subscriptionPayments: 'subscription_payments',
-  pricingPlans: 'pricing_plans',
-  invoices: 'invoices', deliveryOrders: 'delivery_orders',
-  payments: 'payments', returns: 'returns',
-  affiliates: 'affiliates', commissionRules: 'commission_rules',
-  commissionLedger: 'commission_ledger', commissionPayments: 'commission_payments',
-  commissionAudit: 'commission_audit', invoiceAuditLogs: 'invoice_audit_log',
-  deliveryNoteAudit: 'delivery_note_audit',
-  gdriveTokens: 'gdrive_tokens',
-};
+const FIELD_TO_TABLE = CLIENT_FIELD_TO_TABLE;
 
-const ARRAY_FIELDS = Object.keys(FIELD_TO_TABLE);
+const ARRAY_FIELDS = CLIENT_ARRAY_FIELDS;
 
 export function extractChanges(prevDb: DBState, nextDb: DBState): SyncChange[] {
   const changes: SyncChange[] = [];

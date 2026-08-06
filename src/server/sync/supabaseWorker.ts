@@ -1,6 +1,6 @@
 ﻿import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
-import { isSupabaseConfigured, checkConnection, batchUpsert, ensureUuidMappingForPush } from '../services/supabase/supabaseService.js';
+import { isSupabaseConfigured, checkConnection, batchUpsert } from '../services/supabase/supabaseService.js';
 import { transformToPostgres, getConflictColumn, getDeleteCriteria } from '../services/supabase/transform.js';
 import { SYNC_TABLE_SET } from './syncTables.js';
 import fs from 'fs';
@@ -266,48 +266,14 @@ export class SupabaseWorker {
   }
 
   private async processChangelog(): Promise<{ processed: number; failed: number }> {
-    const changes = syncEngine.getChangesForSupabase();
-    if (changes.length === 0) return { processed: 0, failed: 0 };
-
-    let processed = 0;
-    let failed = 0;
-    const pushedIds: string[] = [];
-
-    for (const change of changes) {
-      try {
-        const mapping = this.resolveTableName(change.table);
-
-        if (change.operation === 'DELETE') {
-          const admin = (await import('../services/supabase/supabaseService.js')).getAdminClient();
-          const { column, value } = getDeleteCriteria(change.table, change.recordId);
-          const { error } = await admin.from(mapping).delete().eq(column, value);
-          if (error) throw error;
-        } else {
-          const { syncService } = await import('./syncService.js');
-          // Réaligner le mapping UUID sur la ligne PG existante AVANT le push
-          // (évite les doublons de legacy_id quand sync_uuid_map est incomplet).
-          await ensureUuidMappingForPush(change.table, change.recordId);
-          const record = syncService.getCurrentRecordForPush(change.table, change.recordId, change.data);
-          const pgRecord = transformToPostgres(change.table, record);
-          const result = await batchUpsert(mapping, [pgRecord], getConflictColumn(mapping));
-          if (result.errors.length > 0) throw new Error(result.errors.join('; '));
-        }
-
-        processed++;
-        pushedIds.push(change.changeId);
-      } catch (err: any) {
-        // Retry borné + dead-letter : incrémente retry_count, passe en 'dead'
-        // au-delà de max_retries (visible via /api/sync/failed).
-        syncEngine.markChangeFailed(change.changeId, err?.message);
-        failed++;
-      }
-    }
-
-    if (pushedIds.length > 0) {
-      syncEngine.markPushedToSupabase(pushedIds);
-    }
-
-    return { processed, failed };
+    // M1 : le worker passe par le pipeline UNIQUE (syncService.syncUpFromChangelog)
+    // qui est sérialisé par un verrou en mémoire (pushLock). Tous les exécuteurs
+    // (worker 15 s, fire-and-forget SyncRepository, POST /api/sync, /trigger)
+    // partagent la même implémentation — plus de double-push ni de course
+    // DELETE-vs-UPDATE entre deux exécuteurs qui liraient les mêmes items.
+    const { syncService } = await import('./syncService.js');
+    const result = await syncService.syncUpFromChangelog();
+    return { processed: result.pushed, failed: result.failed };
   }
 
   private resolveTableName(sqliteName: string): string {
