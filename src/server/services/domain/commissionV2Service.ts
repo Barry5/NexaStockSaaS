@@ -21,14 +21,53 @@ export class CommissionV2Service extends BaseService {
       .run(genId('aud'), affiliateId, action, details, userId || null, userName || null, tenantId, now());
   }
 
+  /**
+   * Garantit que la vente existe dans `sales` avant d'enregistrer la commission.
+   * La vente POS est créée côté client (Dexie) avec un id local `sa-...` ; sans
+   * cette création, la FK `sale_affiliates.saleId -> sales(id)` échoue
+   * silencieusement et la commission est perdue.
+   */
+  private ensureSaleExists(data: any, tenantId: string, userName?: string): void {
+    const { saleId, invoiceNumber, customerName, saleDate, saleTotal } = data;
+    const existing = db.prepare('SELECT id FROM sales WHERE id = ?').get(saleId) as any;
+    if (existing) return;
+    const now = new Date().toISOString();
+    const employeeName = userName || 'Caissier';
+    db.prepare(`
+      INSERT INTO sales (id, invoiceNumber, date, subtotal, tax, discount, total, paymentMethod, customerId, customerName, tenantId, employeeId, employeeName, status, invoiceStatus, paymentStatus, creditStatus, payments, returns, creditComments)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      saleId,
+      invoiceNumber || saleId,
+      saleDate || now,
+      0, 0, 0,
+      saleTotal || 0,
+      'cash',
+      null,
+      customerName || null,
+      tenantId,
+      null,
+      employeeName,
+      'Payée', 'Validée', 'Payé', 'Pas de crédit',
+      '[]', '[]', '[]'
+    );
+    try {
+      this.enqueueSync('CREATE', saleId, { id: saleId, invoiceNumber: invoiceNumber || saleId, date: saleDate || now, total: saleTotal || 0, customerName: customerName || null, tenantId, legacy_id: saleId, _table: 'sales' }, tenantId);
+    } catch (e) { /* la sync n'est pas bloquante */ }
+  }
+
   recordSaleCommission(data: any, tenantId: string, userId?: string, userName?: string): any {
     const { saleId, affiliateId, invoiceNumber, customerName, items, paymentSchedule, immediatePayment } = data;
     if (!saleId || !affiliateId || !items) throw new Error('saleId, affiliateId et items requis');
     const aff = db.prepare('SELECT * FROM affiliates WHERE id = ? AND tenantId = ?').get(affiliateId, tenantId) as any;
     if (!aff) throw new Error('Apporteur introuvable');
+    this.ensureSaleExists(data, tenantId, userName);
 
     const schedule = paymentSchedule || 'immediate';
     let totalCommission = 0;
+    let saId = '';
+    let balanceDue = 0;
+    let dueDate: string | null = null;
     const ledgerEntries: string[] = [];
     const commissionItems: any[] = [];
 
@@ -57,9 +96,8 @@ export class CommissionV2Service extends BaseService {
 
       if (totalCommission <= 0) throw new Error('Aucune commission à enregistrer');
 
-      const saId = genId('sa');
-      const balanceDue = totalCommission - (immediatePayment || 0);
-      let dueDate: string | null = null;
+      saId = genId('sa');
+      balanceDue = totalCommission - (immediatePayment || 0);
       if (schedule === 'later') { const d = new Date(); d.setDate(d.getDate() + 30); dueDate = d.toISOString().split('T')[0]; }
       else if (schedule === 'weekly') { const d = new Date(); d.setDate(d.getDate() + 7); dueDate = d.toISOString().split('T')[0]; }
       else if (schedule === 'bi_weekly') { const d = new Date(); d.setDate(d.getDate() + 15); dueDate = d.toISOString().split('T')[0]; }
@@ -88,9 +126,11 @@ export class CommissionV2Service extends BaseService {
       this.addAudit(affiliateId, 'SALE_COMMISSION_RECORDED', `Commission de ${fmt(totalCommission)} enregistrée pour vente ${invoiceNumber || saleId} (${schedule})`, tenantId, userId, userName);
     });
 
-    this.enqueueSync('CREATE', saleId, { saleId, affiliateId, totalCommission, tenantId, legacy_id: saleId, _table: 'sale_affiliates' }, tenantId);
+    try {
+      this.enqueueSync('CREATE', saId, { id: saId, saleId, affiliateId, affiliateName: `${aff.firstName} ${aff.lastName}`, totalCommission, amountPaid: immediatePayment || 0, balanceDue, paymentSchedule: schedule, paymentDueDate: dueDate || null, status: immediatePayment && immediatePayment >= totalCommission ? 'paid' : 'pending', tenantId, legacy_id: saId, _table: 'sale_affiliates' }, tenantId);
+    } catch (e) { /* la sync n'est pas bloquante */ }
     const updatedBalance = this.getAffiliateBalance(affiliateId);
-    return { saleAffiliateId: genId('sa'), totalCommission, immediatePayment: immediatePayment || 0, balanceDue: totalCommission - (immediatePayment || 0), schedule, commissionItems, balance: updatedBalance };
+    return { saleAffiliateId: saId, totalCommission, immediatePayment: immediatePayment || 0, balanceDue: totalCommission - (immediatePayment || 0), schedule, commissionItems, balance: updatedBalance };
   }
 
   getSaleCommission(saleId: string, tenantId: string): { saleAffiliate: any; commissionItems: any[] } {

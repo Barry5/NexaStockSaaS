@@ -14,3 +14,7 @@ database.db-wal
 .DS_Store
 Thumbs.db
 .prompt.md
+Continue
+audit.md
+database.db.bak-*
+database.restored.db

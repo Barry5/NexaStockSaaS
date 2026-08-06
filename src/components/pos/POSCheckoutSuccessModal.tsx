@@ -54,8 +54,8 @@ export default function POSCheckoutSuccessModal(props: POSCheckoutSuccessModalPr
         </div>
 
         {commissionNotification && (
-          <div className="bg-brand-blue/5 border border-brand-blue/10 rounded-xl p-2.5 text-center">
-            <p className="text-[10px] text-blue-400 font-bold flex items-center justify-center gap-1.5">
+          <div className={`rounded-xl p-2.5 text-center ${commissionNotification.startsWith('❌') ? 'bg-red-500/5 border border-red-500/10' : 'bg-brand-blue/5 border border-brand-blue/10'}`}>
+            <p className={`text-[10px] font-bold flex items-center justify-center gap-1.5 ${commissionNotification.startsWith('❌') ? 'text-red-400' : 'text-blue-400'}`}>
               <Handshake className="w-3.5 h-3.5" /> {commissionNotification}
             </p>
           </div>
