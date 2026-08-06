@@ -583,6 +583,7 @@ router.get('/overview', authenticateToken, requireRole(['superadmin']), (req, re
   const queueSummary = SyncQueue.getSummary();
   const pendingChanges = syncEngine.getPendingChangesSummary();
   const lastSyncTimestamps = SyncQueue.loadLastSyncTimestamps();
+  const conflictsCount = (db.prepare(`SELECT COUNT(*) as c FROM sync_conflicts`).get() as any).c;
 
   res.json({
     service: syncService.getStatus(),
@@ -590,7 +591,20 @@ router.get('/overview', authenticateToken, requireRole(['superadmin']), (req, re
     queueSummary,
     pendingChanges,
     lastSyncTimestamps,
+    conflictsCount,
   });
+});
+
+// GET /api/sync/conflicts: conflits de sync persistés (§8.2.1 audit) — qui a
+// gagné, pourquoi, avec quelles données. Purge automatique à 30 j.
+router.get('/conflicts', authenticateToken, requireRole(['superadmin']), (req, res) => {
+  const items = db.prepare(`
+    SELECT id, table_name, record_id, client_version, server_version, strategy, created_at
+    FROM sync_conflicts
+    ORDER BY created_at DESC
+    LIMIT 200
+  `).all() as any[];
+  res.json({ count: items.length, items });
 });
 
 // GET /api/sync/failed: List failed sync queue items with their errors (superadmin debug)

@@ -185,6 +185,7 @@ export class SyncEngine {
                 const conflict = this.buildConflict(table, recordId, clientVersion, serverVersion, data, existing as Record<string, unknown>, 'server_wins');
                 conflict.resolvedData = existing as Record<string, unknown>;
                 result.conflicts.push(conflict);
+                this.persistConflict(conflict);
                 result.applied++;
                 continue;
               }
@@ -192,8 +193,11 @@ export class SyncEngine {
               const resolved = this.resolveConflict('remote_wins', data, existing as Record<string, unknown>);
               conflict.resolvedData = resolved;
               result.conflicts.push(conflict);
+              this.persistConflict(conflict);
+              // La version locale doit suivre : sinon `version` retombe à sa
+              // valeur par défaut (1) et le LWW par version est invalidé.
               this.recordChange(table, recordId, 'UPDATE', existing as Record<string, unknown>, resolved, serverVersion, serverVersion + 1, companyId, deviceId);
-              this.applyRecord(table, colNames, recordId, resolved);
+              this.applyRecord(table, colNames, recordId, { ...resolved, version: serverVersion + 1 });
               result.applied++;
               continue;
             }
@@ -206,6 +210,21 @@ export class SyncEngine {
 
           if (operation === 'UPDATE') {
             if (!existing) {
+              // §3.3-3 / §6.6 : un UPDATE client ne doit PAS ressusciter un
+              // record localement supprimé dont la tombstone n'est pas encore
+              // propagée (sinon : cycle DELETE->pull->re-création instable).
+              const tombstone = db.prepare(`
+                SELECT 1 FROM sync_deletions
+                WHERE table_name = ? AND record_id = ? AND pushed_to_supabase = 0
+              `).get(table, recordId);
+              if (tombstone) {
+                const conflict = this.buildConflict(table, recordId, clientVersion, clientVersion + 1, data, {}, 'server_wins');
+                conflict.resolvedData = {};
+                result.conflicts.push(conflict);
+                this.persistConflict(conflict);
+                result.applied++;
+                continue;
+              }
               const record = { ...data, id: recordId, version: 1, updatedAt: new Date().toISOString() };
               this.applyRecord(table, colNames, recordId, record);
               this.recordChange(table, recordId, 'CREATE', null, record, null, 1, companyId, deviceId);
@@ -219,6 +238,7 @@ export class SyncEngine {
               const conflict = this.buildConflict(table, recordId, clientVersion, serverVersion, data, existing as Record<string, unknown>, 'server_wins');
               conflict.resolvedData = existing as Record<string, unknown>;
               result.conflicts.push(conflict);
+              this.persistConflict(conflict);
               result.applied++;
               continue;
             }
@@ -453,6 +473,11 @@ export class SyncEngine {
     const r5 = db.prepare(`DELETE FROM sync_queue WHERE status = 'failed' AND created_at < ?`).run(cutoff30d);
     removed += r5.changes;
 
+    // §8.2.1 : les conflits persistés (> 30 j) sont purgés avec les autres
+    // diagnostics ; ils restent visibles via /api/sync/conflicts entre-temps.
+    const r6 = db.prepare(`DELETE FROM sync_conflicts WHERE created_at < ?`).run(cutoff30d);
+    removed += r6.changes;
+
     return removed;
   }
 
@@ -493,6 +518,29 @@ export class SyncEngine {
       resolvedData: {},
       strategy,
     };
+  }
+
+  // §8.2.1 audit : persiste le conflit dans sync_conflicts (supervision « qui a
+  // gagné et pourquoi »). Le conflit reste aussi remonté dans PushResult.conflicts.
+  private persistConflict(conflict: SyncConflict): void {
+    try {
+      db.prepare(`
+        INSERT INTO sync_conflicts (id, table_name, record_id, client_version, server_version, client_data, server_data, resolved_data, strategy, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        `confl-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        conflict.table, conflict.recordId,
+        conflict.clientVersion, conflict.serverVersion,
+        conflict.clientData ? JSON.stringify(conflict.clientData) : null,
+        conflict.serverData ? JSON.stringify(conflict.serverData) : null,
+        conflict.resolvedData ? JSON.stringify(conflict.resolvedData) : null,
+        conflict.strategy,
+        new Date().toISOString(),
+      );
+    } catch (err: any) {
+      // La persistance d'un conflit ne doit jamais faire échouer le push.
+      console.warn(`persistConflict failed for ${conflict.table}/${conflict.recordId}: ${err.message}`);
+    }
   }
 
   private resolveConflict(strategy: string, clientData: Record<string, unknown>, serverData: Record<string, unknown>): Record<string, unknown> {
