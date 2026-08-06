@@ -52,6 +52,17 @@ const POSCommissionPanel = forwardRef<POSCommissionPanelHandle, Props>(({ cart, 
   const [customDate, setCustomDate] = useState('');
   const [mode, setMode] = useState<'normal' | 'apporteur'>('normal');
   const [expanded, setExpanded] = useState(true);
+  const [bulkPercent, setBulkPercent] = useState('');
+
+  const applyBulkPercent = () => {
+    const pct = parseFloat(bulkPercent);
+    if (isNaN(pct) || pct < 0) return;
+    const updated = cart.map(item => ({
+      ...item,
+      commissionPerUnit: Math.round(item.negotiatedPrice * pct / 100),
+    }));
+    onCartUpdate(updated);
+  };
 
   useEffect(() => {
     (async () => {
@@ -180,6 +191,23 @@ const POSCommissionPanel = forwardRef<POSCommissionPanelHandle, Props>(({ cart, 
                   </span>
                   {expanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-500" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-500" />}
                 </button>
+
+                {/* Quick bulk % helper */}
+                {expanded && cart.length > 0 && (
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <input type="number" min={0} max={100} step={0.5} value={bulkPercent}
+                      placeholder="%"
+                      onChange={e => setBulkPercent(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') applyBulkPercent(); }}
+                      className="w-16 bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-[11px] text-white text-right outline-none focus:border-brand-blue font-mono"
+                    />
+                    <button onClick={applyBulkPercent}
+                      className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold bg-brand-blue/10 text-blue-400 border border-brand-blue/20 hover:bg-brand-blue/20 transition"
+                    >
+                      Appliquer % à tous les articles
+                    </button>
+                  </div>
+                )}
 
                 <AnimatePresence>
                   {expanded && (

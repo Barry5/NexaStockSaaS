@@ -50,6 +50,8 @@ export default function POS() {
           affiliateId: payload.affiliateId,
           invoiceNumber: sale.invoiceNumber,
           customerName: sale.customerName,
+          saleDate: sale.date,
+          saleTotal: sale.total,
           items: payload.commissionItems,
           paymentSchedule: payload.paymentSchedule,
           immediatePayment: payload.immediatePayment,
@@ -61,9 +63,13 @@ export default function POS() {
         setCommissionNotification(
           `✅ Commission ${data.totalCommission.toLocaleString()} GNF enregistrée pour ${affName}`
         );
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Erreur serveur' }));
+        setCommissionNotification(`❌ Commission non enregistrée : ${err.error || 'erreur inconnue'}`);
       }
     } catch (err) {
       console.error('Commission recording failed:', err);
+      setCommissionNotification('❌ Commission non enregistrée (hors ligne ?). Vérifiez la connexion.');
     }
   }, []);
 
