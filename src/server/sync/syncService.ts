@@ -3,6 +3,7 @@ import { isSupabaseConfigured, checkConnection, batchUpsert, getChangesSince, ge
 import { transformToPostgres, transformFromPostgres, getConflictColumn, getDeleteCriteria, recordUuidMapping, NO_LEGACY_ID_TABLES } from '../services/supabase/transform.js';
 import * as SyncQueue from './syncQueue.js';
 import { syncEngine } from './syncEngine.js';
+import { withPushLock } from './pushLock.js';
 import { TABLE_MAPPINGS, TABLES_WITHOUT_UPDATED_AT } from './syncTables.js';
 
 export type SyncDirection = 'up' | 'down' | 'both';
@@ -91,7 +92,14 @@ class SyncService {
   // Pipeline UNIQUE de push (Phase 1) : sync_changelog -> Supabase.
   // L'état poussé est relu depuis SQLite au moment du push (jamais un snapshot
   // périmé) ; en cas d'échec, l'item est marqué failed/dead (retry borné).
+  // M1 : le corps est sérialisé par withPushLock — le worker (15 s) et les
+  // fire-and-forget (SyncRepository, POST /api/sync) ne poussent JAMAIS les
+  // mêmes items concurrentment (double push / course DELETE-vs-UPDATE).
   async syncUpFromChangelog(): Promise<{ pushed: number; failed: number; errors: string[] }> {
+    return withPushLock(() => this.syncUpFromChangelogUnlocked());
+  }
+
+  private async syncUpFromChangelogUnlocked(): Promise<{ pushed: number; failed: number; errors: string[] }> {
     if (!await this.checkConnectivity()) {
       return { pushed: 0, failed: 0, errors: ['Supabase non disponible'] };
     }
@@ -103,11 +111,14 @@ class SyncService {
     let failed = 0;
     const errors: string[] = [];
     const pushedIds: string[] = [];
+    const pushedDeletions: Array<{ tableName: string; recordId: string }> = [];
 
     for (const change of changes) {
       try {
         if (change.operation === 'DELETE') {
           await this.deleteFromRemote(change.table, change.recordId);
+          // ✔ P3 : la tombstone locale est marquée propagée dès le DELETE réussi.
+          pushedDeletions.push({ tableName: change.table, recordId: change.recordId });
         } else {
           // Réaligner le mapping UUID sur la ligne PG existante AVANT le push
           // (évite les doublons de legacy_id quand sync_uuid_map est incomplet).
@@ -126,6 +137,9 @@ class SyncService {
 
     if (pushedIds.length > 0) {
       syncEngine.markPushedToSupabase(pushedIds);
+    }
+    if (pushedDeletions.length > 0) {
+      syncEngine.markDeletionsPushed(pushedDeletions);
     }
 
     return { pushed, failed, errors };
@@ -235,7 +249,9 @@ class SyncService {
     };
 
     if (direction === 'up' || direction === 'both') {
-      result.upResult = await this.syncUp();
+      // M5 : le push manuel passe par le pipeline UNIQUE (changelog), plus par
+      // la queue legacy sync_queue (réservée au drain de démarrage).
+      result.upResult = await this.syncUpFromChangelog();
     }
     if (direction === 'down' || direction === 'both') {
       result.downResult = await this.syncDown();

@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { DBState, NotificationItem, NotificationType, Tenant, User, Sale, Product, Customer, Supplier, Expense, Loan } from '../types';
 import { fetchServerState, syncWithServer, pullRemoteChanges, flushPendingChanges, enqueueChange, extractChanges, getPendingCount, type SyncChange } from '../api/sync';
+import { TABLE_TO_CLIENT_FIELD, EMBEDDED_CHILDREN } from '../shared/syncMappings';
 import { LOCAL_CACHE_KEY } from '../constants';
 import { setItem as dexieSet, getItem as dexieGet, removeItem as dexieRemove } from '../lib/storage';
 
@@ -24,12 +25,47 @@ interface DBContextValue {
 
 const DBContext = createContext<DBContextValue | null>(null);
 
+// Replie les enregistrements enfants (table `<childTable>`) dans le tableau
+// embarqué du parent (`<parent>.<field>`). Ex : sale_items -> sales[].items,
+// repayments -> loans[].repayments. Le pull PWA porte la table enfant ; le
+// client ne manipulant que les parents embarqués, chaque enfant pullé est soit
+// injecté, soit remplacé dans son parent.
+function mergeChildrenEmbedded(merged: DBState, table: string, records: any[]): DBState {
+  const next = { ...merged };
+  for (const [parentTable, children] of Object.entries(EMBEDDED_CHILDREN)) {
+    const def = children.find(c => c.childTable === table);
+    if (!def) continue;
+    const parentField = TABLE_TO_CLIENT_FIELD[parentTable] as keyof DBState;
+    const parents = (Array.isArray(next[parentField]) ? next[parentField] : []) as any[];
+    const childrenMap = new Map(records.map(r => [r.id, r]));
+    next[parentField] = parents.map(p => {
+      const items = Array.isArray(p[def.field]) ? p[def.field] : [];
+      const updated: any[] = [];
+      const existingIds = new Set<string>();
+      for (const it of items) {
+        existingIds.add(it.id);
+        updated.push(childrenMap.get(it.id) || it);
+      }
+      for (const child of childrenMap.values()) {
+        if (child[def.parentColumn] === p.id && !existingIds.has(child.id)) {
+          updated.push(child);
+        }
+      }
+      return { ...p, [def.field]: updated };
+    }) as never;
+  }
+  return next;
+}
+
 function deepMergeDbState(local: DBState, remoteChanges: Record<string, unknown[]>, deletions: Record<string, string[]>): DBState {
   const merged = { ...local };
 
   for (const [table, records] of Object.entries(remoteChanges)) {
     if (!records.length) continue;
-    const key = table as keyof DBState;
+    // ✔ Mapping table SQLite -> champ DBState (P1) : `stock_transfers` ->
+    // `transfers`, `audit_logs` -> `auditLogs`, `sale_items` -> embarqué.
+    const field = TABLE_TO_CLIENT_FIELD[table] || table;
+    const key = field as keyof DBState;
     const existing = (Array.isArray(merged[key]) ? merged[key] : []) as any[];
     const existingMap = new Map(existing.map(r => [r.id, r]));
 
@@ -48,11 +84,15 @@ function deepMergeDbState(local: DBState, remoteChanges: Record<string, unknown[
       }
     }
     (merged as any)[key] = existing;
+
+    // Repli des enfants (sale_items, repayments…) dans le parent embarqué.
+    Object.assign(merged, mergeChildrenEmbedded(merged as DBState, table, records));
   }
 
   for (const [table, ids] of Object.entries(deletions)) {
     if (!ids.length) continue;
-    const key = table as keyof DBState;
+    const field = TABLE_TO_CLIENT_FIELD[table] || table;
+    const key = field as keyof DBState;
     const existing = (Array.isArray(merged[key]) ? merged[key] : []) as any[];
     (merged as any)[key] = existing.filter(r => !ids.includes(r.id));
   }

@@ -10,6 +10,7 @@ import { supabaseWorker } from '../sync/supabaseWorker.js';
 import * as SyncQueue from '../sync/syncQueue.js';
 import { SYNC_TABLES, SYNC_TABLE_SET } from '../sync/syncTables.js';
 import { TENANT_SCOPED_TABLES, CHILD_TENANT_PARENT, GLOBAL_TABLES, tenantWhereClause } from '../sync/tenantScope.js';
+import { TABLE_TO_CLIENT_FIELD, EMBEDDED_CHILDREN, resolveChildId } from '../../shared/syncMappings.js';
 
 const router = Router();
 
@@ -29,6 +30,19 @@ function scopeChangesForTenant(userTenantId: string | null, changes: any[]): { c
   if (!userTenantId) return { changes, rejected: [] }; // superadmin : aucun filtre
   const scoped: any[] = [];
   const rejected: string[] = [];
+
+  // Parents créés dans le MÊME batch (vente + sale_items, produit + variants…) :
+  // permet de scoper les enfants dont le parent n'existe pas encore en SQLite
+  // au moment du scope (ils seront insérés dans la même transaction pushChanges).
+  const batchParents = new Map<string, Map<string, string>>();
+  for (const c of changes) {
+    const d = c.data || {};
+    if (d.tenantId) {
+      let byId = batchParents.get(c.table);
+      if (!byId) { byId = new Map(); batchParents.set(c.table, byId); }
+      byId.set(c.recordId, d.tenantId);
+    }
+  }
 
   for (const c of changes) {
     const table = c.table;
@@ -71,7 +85,21 @@ function scopeChangesForTenant(userTenantId: string | null, changes: any[]): { c
       const parentId = d[child.column];
       if (parentId) {
         const parent = db.prepare(`SELECT tenantId FROM ${child.parent} WHERE id = ?`).get(parentId) as { tenantId?: string } | undefined;
-        if (!parent || parent.tenantId !== userTenantId) {
+        const batchTenant = batchParents.get(child.parent)?.get(parentId);
+        // ✔ Création en cascade (même batch) : le parent sera inséré par la
+        // même pushChanges — l'enfant est accepté si le parent du batch est
+        // bien du même tenant (ou déjà présent localement).
+        if (parent) {
+          if (parent.tenantId !== userTenantId) {
+            rejected.push(`${table}/${c.recordId}`);
+            continue;
+          }
+        } else if (batchTenant) {
+          if (batchTenant !== userTenantId) {
+            rejected.push(`${table}/${c.recordId}`);
+            continue;
+          }
+        } else {
           rejected.push(`${table}/${c.recordId}`);
           continue;
         }
@@ -324,18 +352,9 @@ export function compileCompleteState(tenantId?: string | null): any {
 
 // Inverse mapping of FIELD_TO_TABLE (src/api/sync.ts): SQLite table name ->
 // key in the client DBState. Used to compute deletions to propagate.
-const CLIENT_FIELD_BY_TABLE: Record<string, string> = {
-  tenants: 'tenants', users: 'users', products: 'products', customers: 'customers',
-  suppliers: 'suppliers', expenses: 'expenses', loans: 'loans',
-  warehouses: 'warehouses', stock_transfers: 'transfers', audit_logs: 'auditLogs',
-  subscription_invoices: 'subscriptionInvoices', product_variants: 'variants',
-  subscription_payments: 'subscriptionPayments', pricing_plans: 'pricingPlans',
-  invoices: 'invoices', delivery_orders: 'deliveryOrders',
-  payments: 'payments', returns: 'returns',
-  affiliates: 'affiliates', commission_rules: 'commissionRules',
-  commission_ledger: 'commissionLedger', commission_payments: 'commissionPayments',
-  commission_audit: 'commissionAudit', invoice_audit_log: 'invoiceAuditLogs',
-};
+// ✔ Centralisé dans src/shared/syncMappings.ts : toute table ajoutée côté
+// client (sales, moduleDefinitions, …) est automatiquement reconnue ici.
+const CLIENT_FIELD_BY_TABLE: Record<string, string> = { ...TABLE_TO_CLIENT_FIELD };
 
 // Phase 3 (C1) : l'inférence de suppression par snapshot client est SUPPRIMÉE —
 // elle pouvait détruire des données (cache client partiel → suppression de masse
@@ -344,17 +363,8 @@ const CLIENT_FIELD_BY_TABLE: Record<string, string> = {
 // chemin delta /api/sync/push).
 
 // Champs enfants embarqués dans le DBState client (tables enfants dérivées).
-const EMBEDDED_CHILDREN: Record<string, Array<{ childTable: string; field: string; parentColumn: string; idKey?: string }>> = {
-  products: [{ childTable: 'product_variants', field: 'variants', parentColumn: 'productId' }],
-  loans: [
-    { childTable: 'repayments', field: 'repayments', parentColumn: 'loanId' },
-    { childTable: 'loan_installments', field: 'installments', parentColumn: 'loanId' },
-  ],
-  sales: [{ childTable: 'sale_items', field: 'items', parentColumn: 'saleId' }],
-  invoices: [{ childTable: 'invoice_items', field: 'items', parentColumn: 'invoiceId' }],
-  delivery_orders: [{ childTable: 'delivery_order_items', field: 'items', parentColumn: 'deliveryOrderId' }],
-  returns: [{ childTable: 'return_items', field: 'items', parentColumn: 'returnId' }],
-};
+// ✔ Centralisé dans src/shared/syncMappings.ts (utilisé par le full-state ET
+// par le delta /api/sync/push, cf. expandEmbeddedChildren).
 
 // Transforme l'état complet du client (full-state POST /api/sync) en deltas
 // versionnés (SyncChange[]) traités par syncEngine.pushChanges : application
@@ -390,7 +400,7 @@ export function buildStateChanges(clientState: Record<string, unknown>): any[] {
           const childRows = (record[child.field] as any[] | undefined) || [];
           for (const childRow of childRows) {
             if (!childRow) continue;
-            const childId = childRow.id || `${record.id}-item-${childRows.indexOf(childRow)}`;
+            const childId = resolveChildId(record.id, childRow, childRows.indexOf(childRow));
             const childExists = db.prepare(`SELECT id FROM ${child.childTable} WHERE id = ?`).get(childId) !== undefined;
             changes.push({
               table: child.childTable,
@@ -412,6 +422,39 @@ export function buildStateChanges(clientState: Record<string, unknown>): any[] {
   }
 
   return changes;
+}
+
+// ✔ P1/P2 : éclate les enfants embarqués du delta client (/api/sync/push).
+// Le client porte les enfants DANS le parent (sales.items, loan.repayments…)
+// ; sans cet éclatement les enfants ne seraient JAMAIS journalisés dans le
+// changelog -> jamais poussés vers Supabase (ventes POS, articles de vente,
+// remboursements de prêts). Les DELETEs parents ne propagent pas enfants
+// (ils sont/CASCADE gérés côté PG — supprimer explicitement via /api/sync/push).
+export function expandEmbeddedChildren(changes: any[]): any[] {
+  const expanded: any[] = [];
+  for (const c of changes) {
+    expanded.push(c);
+    const children = EMBEDDED_CHILDREN[c.table];
+    if (!children || c.operation === 'DELETE') continue;
+    const record = (c.data || {}) as Record<string, unknown>;
+    for (const child of children) {
+      const childRow = (record as any)[child.field];
+      const childRows = Array.isArray(childRow) ? childRow as any[] : [];
+      for (let i = 0; i < childRows.length; i++) {
+        const row = childRows[i];
+        if (!row) continue;
+        const childId = resolveChildId(c.recordId, row, i);
+        expanded.push({
+          table: child.childTable,
+          recordId: childId,
+          operation: 'CREATE' as const,
+          data: { ...row, id: childId, [child.parentColumn]: c.recordId },
+          version: typeof row.version === 'number' ? row.version : 1,
+        });
+      }
+    }
+  }
+  return expanded;
 }
 
 // GET /api/sync/changes?since=ISO_TIMESTAMP - Delta sync endpoint (scopé tenant)
@@ -442,9 +485,12 @@ router.get('/changes', authenticateToken, (req: AuthenticatedRequest, res, next)
       }
     }
 
+    // M4 : les tombstones de suppression sont lus depuis sync_deletions
+    // (tombstones locaux effectifs), plus depuis la file legacy sync_queue —
+    // qui n'est plus alimentée par le pipeline unique (changelog).
     const deleted = db.prepare(`
-      SELECT table_name, record_id, created_at FROM sync_queue
-      WHERE operation = 'DELETE' AND created_at >= ? AND status = 'completed'
+      SELECT table_name, record_id, deleted_at AS created_at FROM sync_deletions
+      WHERE deleted_at >= ?
     `).all(since) as any[];
 
     res.json({ changes, deleted, since, timestamp: new Date().toISOString() });
@@ -745,9 +791,13 @@ router.post('/push', authenticateToken, async (req: AuthenticatedRequest, res, n
     const tenantId = req.user?.tenantId ?? null;
     const deviceId = req.headers['x-device-id'] as string || 'server';
 
+    // ✔ P1 : éclatement des enfants embarqués (sales.items -> sale_items,
+    // loan.repayments -> repayments, …) avant scope tenant + application.
+    const expanded = expandEmbeddedChildren(changes);
+
     // SEC-2/10 : les changements d'un autre tenant (ou de tables globales pour
     // un tenant) sont rejetés avant toute écriture locale.
-    const scoped = scopeChangesForTenant(tenantId, changes);
+    const scoped = scopeChangesForTenant(tenantId, expanded);
     if (scoped.rejected.length > 0) {
       console.warn(`[SYNC PUSH] ${scoped.rejected.length} changement(s) rejetés (tenant/global): ${scoped.rejected.slice(0, 5).join(', ')}${scoped.rejected.length > 5 ? '…' : ''}`);
     }

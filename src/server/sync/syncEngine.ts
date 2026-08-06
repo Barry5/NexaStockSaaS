@@ -304,6 +304,24 @@ export class SyncEngine {
     db.prepare(`UPDATE sync_changelog SET pushed_to_supabase = 1, status = 'pushed' WHERE id IN (${placeholders})`).run(...ids);
   }
 
+  // ✔ P3 : marque les tombstones sync_deletions comme propagées après un
+  // DELETE poussé vers Supabase. Sans cela, les tombstones restaient à
+  // pushed_to_supabase = 0 pour toujours : le dashboard affichait des
+  // suppressions en attente fantômes et cleanupPushedRecords ne purgeait
+  // jamais ces lignes (croissance infinie de la table).
+  markDeletionsPushed(deleted: Array<{ tableName: string; recordId: string }>) {
+    if (deleted.length === 0) return;
+    const transaction = db.transaction(() => {
+      for (const d of deleted) {
+        db.prepare(`
+          UPDATE sync_deletions SET pushed_to_supabase = 1
+          WHERE table_name = ? AND record_id = ?
+        `).run(d.tableName, d.recordId);
+      }
+    });
+    transaction();
+  }
+
   markChangeFailed(changeId: string, error?: string) {
     db.prepare(`
       UPDATE sync_changelog
