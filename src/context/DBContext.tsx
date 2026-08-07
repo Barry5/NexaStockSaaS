@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { DBState, NotificationItem, NotificationType, Tenant, User, Sale, Product, Customer, Supplier, Expense, Loan } from '../types';
-import { fetchServerState, syncWithServer, pullRemoteChanges, flushPendingChanges, enqueueChange, extractChanges, getPendingCount, type SyncChange } from '../api/sync';
+import { fetchServerState, pullRemoteChanges, flushPendingChanges, enqueueChange, extractChanges, getPendingCount, type SyncChange } from '../api/sync';
 import { LOCAL_CACHE_KEY } from '../constants';
 import { setItem as dexieSet, getItem as dexieGet, removeItem as dexieRemove } from '../lib/storage';
 
@@ -151,26 +151,6 @@ export function DBProvider({ children }: { children: ReactNode }) {
       setIsSyncing(false);
     }
   }, [persistCache, isOnline, flushNow]);
-
-  const fullSync = useCallback(async (updatedDb: DBState) => {
-    setIsSyncing(true);
-    try {
-      const savedData = await syncWithServer(updatedDb);
-      if (savedData && typeof savedData === 'object') {
-        setDb(savedData);
-        persistCache(savedData);
-        setSyncError(false);
-      }
-    } catch (error: any) {
-      console.error('Full sync failed:', error?.message || error);
-      setSyncError(true);
-      if (error?.message?.includes('401') || error?.message?.includes('Token')) {
-        addNotification('Session expirée. Veuillez vous reconnecter.', 'error');
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [persistCache, addNotification]);
 
   useEffect(() => {
     (async () => {
