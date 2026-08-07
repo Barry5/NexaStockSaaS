@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Package, Save, RefreshCw, Check, X, AlertTriangle, Layers } from 'lucide-react';
 import { useDB, useApp } from '../context';
+import { formatCurrency } from '../utils';
 
 export default function SuperAdminModuleManager() {
   const { db, addNotification } = useDB();
@@ -135,7 +136,7 @@ export default function SuperAdminModuleManager() {
             }`}
           >
             {plan.name}
-            <span className="text-[9px] font-mono opacity-60">{plan.price}€</span>
+            <span className="text-[9px] font-mono opacity-60">{formatCurrency(plan.price ?? 0, plan.currency || db.saasCurrency || 'EUR', 0)}</span>
           </button>
         ))}
       </div>

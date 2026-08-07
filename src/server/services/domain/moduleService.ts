@@ -24,11 +24,35 @@ export class ModuleService extends BaseService {
   }
 
   setPlanModules(planId: string, moduleKeys: string[]): any[] {
-    db.prepare('DELETE FROM plan_modules WHERE planId = ?').run(planId);
-    const insert = db.prepare('INSERT INTO plan_modules (id, planId, moduleKey, enabled) VALUES (?, ?, ?, 1)');
-    for (let i = 0; i < moduleKeys.length; i++) {
-      insert.run(genId('pm'), planId, moduleKeys[i]);
-    }
+    const keys = [...new Set(moduleKeys)];
+    const wanted = new Set(keys);
+    const existing = db.prepare('SELECT * FROM plan_modules WHERE planId = ?').all(planId) as any[];
+    const existingByKey = new Map(existing.map(r => [r.moduleKey, r]));
+
+    const transaction = db.transaction(() => {
+      // Diff : persistent + journalise dans sync_changelog (le SupabaseWorker
+      // poussera vers PostgreSQL). Sans ça, la config locale était écrasée à
+      // chaque lancement par le pull PG (stale).
+      for (const row of existing) {
+        if (wanted.has(row.moduleKey)) {
+          if (row.enabled !== 1) {
+            db.prepare('UPDATE plan_modules SET enabled = 1 WHERE id = ?').run(row.id);
+            this.enqueueSyncFor('plan_modules', row.id, 'UPDATE', { id: row.id, planId, moduleKey: row.moduleKey, enabled: 1 });
+          }
+        } else {
+          db.prepare('DELETE FROM plan_modules WHERE id = ?').run(row.id);
+          this.enqueueSyncFor('plan_modules', row.id, 'DELETE', { id: row.id, planId, moduleKey: row.moduleKey, enabled: row.enabled });
+        }
+      }
+      for (const key of keys) {
+        if (existingByKey.has(key)) continue;
+        const id = genId('pm');
+        db.prepare('INSERT INTO plan_modules (id, planId, moduleKey, enabled) VALUES (?, ?, ?, 1)').run(id, planId, key);
+        this.enqueueSyncFor('plan_modules', id, 'CREATE', { id, planId, moduleKey: key, enabled: 1 });
+      }
+    });
+    transaction();
+
     return this.getPlanModules(planId);
   }
 
