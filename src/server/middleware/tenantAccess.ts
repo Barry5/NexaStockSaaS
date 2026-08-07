@@ -53,9 +53,6 @@ export function requireModuleAccess(moduleKey: string) {
     const tenant = db.prepare('SELECT subscriptionPlanId, plan FROM tenants WHERE id = ?').get(tenantId) as any;
     if (!tenant) return res.status(403).json({ error: 'Abonnement introuvable.' });
 
-    const planId = getEffectivePlanId(tenant);
-    if (!planId) return res.status(403).json({ error: 'Plan d\'abonnement introuvable.' });
-
     // Check core module
     const moduleDef = db.prepare('SELECT is_core FROM module_definitions WHERE key = ?').get(moduleKey) as any;
     if (moduleDef && moduleDef.is_core) return next();
@@ -66,6 +63,15 @@ export function requireModuleAccess(moduleKey: string) {
       if (!tenantModule.enabled) return res.status(HTTP_STATUS.FORBIDDEN).json({ error: `Module "${moduleKey}" désactivé pour cet abonnement.` });
       return next();
     }
+
+    const planId = getEffectivePlanId(tenant);
+    if (!planId) return next();
+
+    // Fail-open : un forfait sans aucune ligne plan_modules (ou non configuré)
+    // ne retire jamais l'accès aux modules — un changement de forfait ne doit
+    // rien changer à part le forfait.
+    const planModuleCount = (db.prepare('SELECT COUNT(*) AS c FROM plan_modules WHERE planId = ?').get(planId) as any)?.c || 0;
+    if (planModuleCount === 0) return next();
 
     // Check plan module
     const planModule = db.prepare('SELECT enabled FROM plan_modules WHERE planId = ? AND moduleKey = ?').get(planId, moduleKey) as any;
@@ -86,15 +92,29 @@ export function requireActiveUser(req: AuthenticatedRequest, res: Response, next
   next();
 }
 
+function allModuleKeys(): string[] {
+  return (db.prepare('SELECT key FROM module_definitions ORDER BY display_order ASC').all() as any[]).map(r => r.key);
+}
+
 export function getTenantAvailableModules(tenantId: string): string[] {
   const tenant = db.prepare('SELECT subscriptionPlanId, plan FROM tenants WHERE id = ?').get(tenantId) as any;
   const planId = getEffectivePlanId(tenant);
-  if (!planId) return ['dashboard', 'sales'];
 
-  const planModules = db.prepare('SELECT moduleKey FROM plan_modules WHERE planId = ? AND enabled = 1').all(planId) as any[];
-  const planModuleKeys = new Set(planModules.map(p => p.moduleKey));
+  const planModules = planId
+    ? (db.prepare('SELECT moduleKey FROM plan_modules WHERE planId = ? AND enabled = 1').all(planId) as any[]).map(p => p.moduleKey)
+    : [];
 
   const tenantOverrides = db.prepare('SELECT moduleKey, enabled FROM tenant_modules WHERE tenantId = ?').all(tenantId) as any[];
+  const disabledOverrides = tenantOverrides.filter(t => !t.enabled).map(t => t.moduleKey);
+
+  // Fail-open : aucun module configuré pour ce forfait (forfait inconnu ou
+  // plan_modules vide) -> on n'enlève jamais l'accès aux modules existants.
+  // Un changement de forfait ne doit rien changer à part le forfait.
+  if (planModules.length === 0) {
+    return allModuleKeys().filter(k => !disabledOverrides.includes(k));
+  }
+
+  const planModuleKeys = new Set(planModules);
   for (const to of tenantOverrides) {
     if (to.enabled) {
       planModuleKeys.add(to.moduleKey);
