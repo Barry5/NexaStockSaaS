@@ -26,35 +26,43 @@ export class SyncRepository<T extends Syncable> {
   }
 
   create(data: Partial<T>, companyId?: string, deviceId?: string): T {
-    const record = this.local.create(data);
+    const record = this.local.transaction(() => {
+      const newRecord = this.local.create(data);
 
-    syncEngine.logChange(
-      this.tableName,
-      (record as any)[this.idColumn],
-      'CREATE',
-      record as unknown as Record<string, unknown>,
-      companyId,
-      deviceId
-    );
+      syncEngine.logChange(
+        this.tableName,
+        (newRecord as any)[this.idColumn],
+        'CREATE',
+        newRecord as unknown as Record<string, unknown>,
+        companyId,
+        deviceId
+      );
+      return newRecord;
+    });
 
     this.triggerBackgroundSync();
     return record;
   }
 
   update(id: string, data: Partial<T>, companyId?: string, deviceId?: string): T | null {
-    const record = this.local.update(id, data);
-    if (!record) return null;
+    const record = this.local.transaction(() => {
+      const updatedRecord = this.local.update(id, data);
+      if (!updatedRecord) return null;
 
-    syncEngine.logChange(
-      this.tableName,
-      id,
-      'UPDATE',
-      record as unknown as Record<string, unknown>,
-      companyId,
-      deviceId
-    );
+      syncEngine.logChange(
+        this.tableName,
+        id,
+        'UPDATE',
+        updatedRecord as unknown as Record<string, unknown>,
+        companyId,
+        deviceId
+      );
+      return updatedRecord;
+    });
 
-    this.triggerBackgroundSync();
+    if (record) {
+      this.triggerBackgroundSync();
+    }
     return record;
   }
 
