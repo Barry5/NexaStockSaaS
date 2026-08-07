@@ -1,6 +1,5 @@
 import { LocalRepository } from './localRepository.js';
 import { RemoteRepository } from './remoteRepository.js';
-import { syncService } from '../sync/syncService.js';
 import { syncEngine } from '../sync/syncEngine.js';
 import type { Syncable } from './baseRepository.js';
 import type { SyncOperation } from '../sync/syncQueue.js';
@@ -40,7 +39,9 @@ export class SyncRepository<T extends Syncable> {
       return newRecord;
     });
 
-    this.triggerBackgroundSync();
+    // Le SupabaseWorker (15 s) est l'UNIQUE planificateur : plus de
+    // syncUpFromChangelog fire-and-forget ici (audit §6.2/14.6). Le logChange
+    // ci-dessus alimente le changelog ; le worker pousse ensuite vers PG.
     return record;
   }
 
@@ -60,9 +61,6 @@ export class SyncRepository<T extends Syncable> {
       return updatedRecord;
     });
 
-    if (record) {
-      this.triggerBackgroundSync();
-    }
     return record;
   }
 
@@ -81,7 +79,6 @@ export class SyncRepository<T extends Syncable> {
       deviceId
     );
 
-    this.triggerBackgroundSync();
     return result;
   }
 
@@ -91,11 +88,5 @@ export class SyncRepository<T extends Syncable> {
 
   count(tenantId?: string): number {
     return this.local.count(tenantId);
-  }
-
-  private triggerBackgroundSync() {
-    if (syncService.isOnline()) {
-      syncService.syncUpFromChangelog().catch(() => {});
-    }
   }
 }

@@ -897,14 +897,9 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res, next)
     if (applied > 0 || conflicts > 0 || deletionPushed > 0) {
       console.log(`[SYNC POST] merge: ${applied} appliqués, ${conflicts} conflits (LWW), ${deletionPushed} suppressions explicites propagées`);
     }
-
-    syncService.syncUpFromChangelog()
-      .then(r2 => {
-        if (r2.pushed > 0 || r2.failed > 0) {
-          console.log(`[SYNC POST] changelog: ${r2.pushed} pushed, ${r2.failed} failed`);
-        }
-      })
-      .catch(err => console.error('[SYNC POST] sync error:', err));
+    // Pas de syncUpFromChangelog fire-and-forget ici : le SupabaseWorker (15 s)
+    // est l'UNIQUE planificateur (audit §6.2/14.6). Le changelog alimenté par
+    // pushChanges est poussé par le prochain tick du worker.
   } catch (error) {
     next(error);
   }
