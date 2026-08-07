@@ -22,7 +22,7 @@ import POSQuickCustomerModal from './pos/POSQuickCustomerModal';
 import POSCheckoutSuccessModal from './pos/POSCheckoutSuccessModal';
 import POSReturnModal from './pos/POSReturnModal';
 import POSShareModal from './pos/POSShareModal';
-import POSCommissionPanel, { type POSCommissionPanelHandle } from './pos/POSCommissionPanel';
+import POSCommissionPanel, { type POSCommissionPanelHandle, type CommissionPayload } from './pos/POSCommissionPanel';
 
 function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const token = localStorage.getItem('nexastock_token');
@@ -34,11 +34,12 @@ function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
 
 export default function POS() {
   const commissionRef = useRef<POSCommissionPanelHandle>(null);
+  const commissionSnapshotRef = useRef<CommissionPayload | null>(null);
   const [commissionNotification, setCommissionNotification] = useState('');
 
   const recordCommissionAfterCheckout = useCallback(async (sale: any) => {
-    if (!commissionRef.current?.isActive()) return;
-    const payload = commissionRef.current.getPayload();
+    const payload = commissionSnapshotRef.current;
+    commissionSnapshotRef.current = null;
     if (!payload || payload.commissionItems.length === 0) return;
 
     try {
@@ -163,6 +164,11 @@ export default function POS() {
     handleSaveTenantConfig,
   } = usePOSState();
 
+  const handleCheckoutWithCommission = useCallback(() => {
+    commissionSnapshotRef.current = commissionRef.current?.getPayload() ?? null;
+    handleCheckout();
+  }, [handleCheckout]);
+
   useEffect(() => {
     if (checkoutSuccess && generatedSale) {
       recordCommissionAfterCheckout(generatedSale);
@@ -254,7 +260,7 @@ export default function POS() {
             creditDueDate={creditDueDate} setCreditDueDate={setCreditDueDate}
             installmentsCount={installmentsCount} setInstallmentsCount={setInstallmentsCount}
             handleBarcodeSubmit={handleBarcodeSubmit}
-            handleCheckout={handleCheckout}
+            handleCheckout={handleCheckoutWithCommission}
             setIsAddCustomerOpen={setIsAddCustomerOpen}
             setCart={setCart}
             commissionRef={commissionRef}
