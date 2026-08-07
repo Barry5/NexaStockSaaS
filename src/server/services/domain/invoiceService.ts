@@ -186,29 +186,38 @@ export class InvoiceService extends BaseService {
       this.enqueueSync('CREATE', id, { ...invoice, legacy_id: id }, tenantId);
       this.addAuditLog(id, 'INVOICE_CREATED', `Facture ${invoiceNumber} créée avec ${items.length} article(s)`, userId, userName);
 
-      // Apporteur d'affaires optionnel : la commission est calculée à partir du
-      // taux (commission.rate, % du prix HT de chaque ligne) et enregistrée DANS
-      // la même transaction (invoice_affiliates + invoice_commission_items +
-      // commission_ledger), puis synchronisée comme les ventes.
-      if (commission?.affiliateId && (commission.rate || 0) > 0) {
-        const rate = Number(commission.rate);
-        const commissionItems = invoiceItems.map((ii: any) => ({
-          productId: ii.productId,
-          productName: ii.productName,
-          quantity: ii.quantity,
-          sellPrice: ii.price,
-          commissionPerUnit: Number((ii.price * rate / 100).toFixed(2)),
-        }));
-        commissionV2Service.recordInvoiceCommission({
-          invoiceId: id,
-          affiliateId: commission.affiliateId,
-          invoiceNumber,
-          customerName: customerName || null,
-          items: commissionItems,
-          paymentSchedule: commission.paymentSchedule,
-          immediatePayment: commission.immediatePayment,
-          paymentDueDate: commission.paymentDueDate,
-        }, tenantId, userId, userName);
+      // Apporteur d'affaires optionnel : la commission est saisie PAR ARTICLE
+      // (commissionPerUnit), comme sur le POS (POSCommissionPanel). Enregistrée
+      // DANS la même transaction (invoice_affiliates + invoice_commission_items
+      // + commission_ledger), puis synchronisée comme les ventes.
+      if (commission?.affiliateId) {
+        let commissionItems = Array.isArray(commission.commissionItems)
+          ? commission.commissionItems
+          : [];
+        // Repli rétro-compatible : taux (%) appliqué au prix HT de chaque ligne
+        if (commissionItems.length === 0 && (commission.rate || 0) > 0) {
+          const rate = Number(commission.rate);
+          commissionItems = invoiceItems.map((ii: any) => ({
+            productId: ii.productId,
+            productName: ii.productName,
+            quantity: ii.quantity,
+            sellPrice: ii.price,
+            commissionPerUnit: Number((ii.price * rate / 100).toFixed(2)),
+          }));
+        }
+        const activeCommissionItems = commissionItems.filter((c: any) => (c.commissionPerUnit || 0) > 0);
+        if (activeCommissionItems.length > 0) {
+          commissionV2Service.recordInvoiceCommission({
+            invoiceId: id,
+            affiliateId: commission.affiliateId,
+            invoiceNumber,
+            customerName: customerName || null,
+            items: activeCommissionItems,
+            paymentSchedule: commission.paymentSchedule,
+            immediatePayment: commission.immediatePayment,
+            paymentDueDate: commission.paymentDueDate,
+          }, tenantId, userId, userName);
+        }
       }
     });
 

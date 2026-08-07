@@ -833,7 +833,7 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
-  const [items, setItems] = useState<{ productId: string; productName: string; quantity: number; price: number }[]>([]);
+  const [items, setItems] = useState<{ productId: string; productName: string; quantity: number; price: number; commissionPerUnit?: number }[]>([]);
   const [taxRate, setTaxRate] = useState(20);
   const [discount, setDiscount] = useState(0);
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
@@ -841,15 +841,48 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
   const [notes, setNotes] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [commissionAffiliateId, setCommissionAffiliateId] = useState('');
-  const [commissionRate, setCommissionRate] = useState(0);
   const [commissionSchedule, setCommissionSchedule] = useState('immediate');
-  const [commissionImmediate, setCommissionImmediate] = useState(0);
+  const [commissionCustomDate, setCommissionCustomDate] = useState('');
+  const [bulkPercent, setBulkPercent] = useState('');
   const [loading, setLoading] = useState(false);
 
   const activeTenant = useMemo(() => db.tenants.find((t: any) => t.id === activeTenantId), [db.tenants, activeTenantId]);
   const tenantProducts = useMemo(() => db.products.filter((p: any) => p.tenantId === activeTenantId), [db.products, activeTenantId]);
   const customers = useMemo(() => db.customers.filter((c: any) => c.tenantId === activeTenantId), [db.customers, activeTenantId]);
   const affiliates = useMemo(() => (db.affiliates || []).filter((a: any) => a.tenantId === activeTenantId && (a.status !== 'inactive')), [db.affiliates, activeTenantId]);
+
+  const SCHEDULE_OPTIONS = [
+    { value: 'immediate', label: 'Immédiat', desc: 'Payer maintenant' },
+    { value: 'later', label: 'Plus tard', desc: 'Sous 30 jours' },
+    { value: 'weekly', label: 'Semaine', desc: 'Chaque semaine' },
+    { value: 'bi_weekly', label: 'Quinzaine', desc: 'Toutes les 2 semaines' },
+    { value: 'end_of_month', label: 'Fin de mois', desc: 'En fin de mois' },
+    { value: 'custom', label: 'Date choisie', desc: 'Choisir une date' },
+  ];
+
+  const commissionItemsList = items.filter(i => (i.commissionPerUnit || 0) > 0);
+  const totalCommission = commissionItemsList.reduce((sum, i) => sum + (i.commissionPerUnit || 0) * i.quantity, 0);
+
+  const applyBulkPercent = () => {
+    const pct = parseFloat(bulkPercent);
+    if (isNaN(pct) || pct < 0) return;
+    setItems(prev => prev.map(item => ({
+      ...item,
+      commissionPerUnit: item.price > 0 ? Number((item.price * pct / 100).toFixed(2)) : 0,
+    })));
+  };
+
+  const handleSelectAffiliate = (id: string) => {
+    setCommissionAffiliateId(id);
+    setBulkPercent('');
+  };
+
+  const handleRemoveAffiliate = () => {
+    setCommissionAffiliateId('');
+    setCommissionSchedule('immediate');
+    setCommissionCustomDate('');
+    setItems(prev => prev.map(item => ({ ...item, commissionPerUnit: undefined })));
+  };
 
   const handleAddItem = () => {
     setItems(prev => [...prev, { productId: '', productName: '', quantity: 1, price: 0 }]);
@@ -881,7 +914,6 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
   const discAmount = discountType === 'percentage' ? subtotal * (discount / 100) : discount;
   const tax = subtotal * (taxRate / 100);
   const total = subtotal + tax - discAmount + shipping;
-  const commissionEstimate = commissionAffiliateId && commissionRate > 0 ? (subtotal * commissionRate / 100) : 0;
 
   const handleSubmit = async () => {
     if (items.length === 0) { addNotification('Ajoutez au moins un article', 'error'); return; }
@@ -893,12 +925,19 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
           customerId: customerId || null, customerName: customerName || null, customerPhone: customerPhone || null,
           customerEmail: customerEmail || null, items: items.map(i => ({ ...i, productSku: tenantProducts.find((p: any) => p.id === i.productId)?.sku || '' })),
           taxRate, discount, discountType, shipping, notes, dueDate: dueDate || null,
-          ...(commissionAffiliateId && commissionRate > 0 ? {
+          ...(commissionAffiliateId && commissionItemsList.length > 0 ? {
             commission: {
               affiliateId: commissionAffiliateId,
-              rate: commissionRate,
+              commissionItems: commissionItemsList.map(i => ({
+                productId: i.productId || null,
+                productName: i.productName,
+                quantity: i.quantity,
+                sellPrice: i.price,
+                commissionPerUnit: i.commissionPerUnit,
+              })),
               paymentSchedule: commissionSchedule,
-              immediatePayment: commissionSchedule === 'immediate' ? commissionEstimate : commissionImmediate || 0,
+              ...(commissionSchedule === 'custom' && commissionCustomDate ? { paymentDueDate: commissionCustomDate } : {}),
+              immediatePayment: commissionSchedule === 'immediate' ? totalCommission : 0,
             }
           } : {})
         })
@@ -1017,53 +1056,103 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold text-gray-300 uppercase tracking-wider font-mono">Apporteur d'affaires (commission)</h3>
           {commissionAffiliateId && (
-            <button onClick={() => { setCommissionAffiliateId(''); setCommissionRate(0); setCommissionImmediate(0); }} className="text-[10px] font-mono text-red-400 hover:text-red-300 flex items-center gap-1">
+            <button onClick={handleRemoveAffiliate} className="text-[10px] font-mono text-red-400 hover:text-red-300 flex items-center gap-1">
               <X className="w-3 h-3" /> Retirer
             </button>
           )}
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="text-[10px] font-mono text-gray-500 block mb-1">Apporteur</label>
-            <select value={commissionAffiliateId} onChange={e => setCommissionAffiliateId(e.target.value)} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white">
-              <option value="">Aucun</option>
-              {affiliates.map((a: any) => <option key={a.id} value={a.id}>{a.firstName} {a.lastName}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] font-mono text-gray-500 block mb-1">Taux de commission (%)</label>
-            <input type="number" min="0" step="0.1" value={commissionRate} onChange={e => setCommissionRate(parseFloat(e.target.value) || 0)} disabled={!commissionAffiliateId} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white font-mono disabled:opacity-50" placeholder="0" />
-          </div>
-          <div>
-            <label className="text-[10px] font-mono text-gray-500 block mb-1">Échéance de paiement</label>
-            <select value={commissionSchedule} onChange={e => setCommissionSchedule(e.target.value)} disabled={!commissionAffiliateId} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white disabled:opacity-50">
-              <option value="immediate">Immédiate</option>
-              <option value="later">30 jours</option>
-              <option value="weekly">Hebdomadaire (7j)</option>
-              <option value="bi_weekly">Bi-hebdomadaire (15j)</option>
-              <option value="end_of_month">Fin de mois</option>
-            </select>
-          </div>
-          {commissionSchedule !== 'immediate' && (
-            <div>
-              <label className="text-[10px] font-mono text-gray-500 block mb-1">Acompte immédiat (optionnel)</label>
-              <input type="number" min="0" value={commissionImmediate} onChange={e => setCommissionImmediate(parseFloat(e.target.value) || 0)} disabled={!commissionAffiliateId} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white font-mono disabled:opacity-50" placeholder="0" />
-            </div>
-          )}
+        <div>
+          <label className="text-[10px] font-mono text-gray-500 block mb-1">Apporteur</label>
+          <select value={commissionAffiliateId} onChange={e => handleSelectAffiliate(e.target.value)} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white">
+            <option value="">Aucun</option>
+            {affiliates.map((a: any) => <option key={a.id} value={a.id}>{a.firstName} {a.lastName}{a.phone ? ` (${a.phone})` : ''}</option>)}
+          </select>
         </div>
-        {commissionAffiliateId && commissionRate > 0 && (
-          <div className="flex items-center justify-between text-xs text-gray-400 pt-2 border-t border-gray-800">
-            <span>Commission estimée ({commissionRate}% du sous-total)</span>
-            <span className="font-mono font-bold text-emerald-400">{formatCurrency(commissionEstimate, activeTenant?.currency)}</span>
+        {commissionAffiliateId && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono text-gray-500">Commission par article</span>
+              <div className="flex items-center gap-1.5">
+                <input type="number" min={0} max={100} step={0.5} value={bulkPercent} placeholder="%"
+                  onChange={e => setBulkPercent(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') applyBulkPercent(); }}
+                  className="w-14 bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-[11px] text-white text-right font-mono" />
+                <button onClick={applyBulkPercent} className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition">
+                  Appliquer % à tous
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {items.map((item, idx) => {
+                const comm = item.commissionPerUnit || 0;
+                const prod = tenantProducts.find((p: any) => p.id === item.productId);
+                const margin = prod ? (item.price - (prod.buyPrice || 0)) : 0;
+                return (
+                  <div key={idx} className="flex items-center gap-2 bg-gray-950/50 rounded-lg p-2.5 border border-gray-800">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-bold text-gray-200 truncate">{item.productName || 'Article'}</p>
+                      <p className="text-[9px] text-gray-500">{item.quantity} x {item.price} = {(item.quantity * item.price).toLocaleString()} {activeTenant?.currency || ''}</p>
+                      {comm > 0 && (
+                        <p className="text-[9px] font-bold text-emerald-400 mt-0.5">Commission: {(comm * item.quantity).toLocaleString()} ({(comm).toLocaleString()}/unité)</p>
+                      )}
+                      {prod && comm > margin && margin >= 0 && (
+                        <p className="text-[9px] text-red-400 flex items-center gap-1 mt-0.5"><AlertTriangle className="w-2.5 h-2.5" /> Commission &gt; marge ({margin.toLocaleString()})</p>
+                      )}
+                    </div>
+                    <div className="flex-shrink-0 w-28">
+                      <input type="number" min={0}
+                        value={comm || ''} placeholder="0" title="Commission (par unité)"
+                        onChange={e => setItems(prev => prev.map((i, index) => index === idx ? { ...i, commissionPerUnit: Math.max(0, Number(e.target.value)) } : i))}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-[11px] text-white text-right font-mono" />
+                    </div>
+                  </div>
+                );
+              })}
+              {items.length === 0 && (
+                <p className="text-center py-4 text-gray-500 text-[11px]">Ajoutez d'abord des articles</p>
+              )}
+            </div>
+
+            {totalCommission > 0 && (
+              <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-3 space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-300">Commission totale</span>
+                  <span className="text-sm font-bold text-emerald-400">{formatCurrency(totalCommission, activeTenant?.currency)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-gray-500">Articles commissionnés</span>
+                  <span className="text-[10px] text-gray-400">{commissionItemsList.length}/{items.length}</span>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="text-[10px] font-mono text-gray-500 block mb-1.5">Échéance de paiement</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {SCHEDULE_OPTIONS.map(opt => (
+                  <button key={opt.value} onClick={() => setCommissionSchedule(opt.value)}
+                    className={`text-left px-3 py-2 rounded-lg border text-[10px] transition ${
+                      commissionSchedule === opt.value ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-gray-950 border-gray-800 text-gray-400 hover:border-gray-700'
+                    }`}>
+                    <span className="font-bold block">{opt.label}</span>
+                    <span className="text-[8px] text-gray-500">{opt.desc}</span>
+                  </button>
+                ))}
+              </div>
+              {commissionSchedule === 'custom' && (
+                <input type="date" value={commissionCustomDate} onChange={e => setCommissionCustomDate(e.target.value)}
+                  className="mt-2 w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white" />
+              )}
+            </div>
           </div>
         )}
-      </div>
 
-      <div className="flex gap-3 justify-end">
-        <button onClick={onCreated} className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold px-5 py-2.5 rounded-lg">Annuler</button>
-        <button onClick={handleSubmit} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-5 py-2.5 rounded-lg flex items-center gap-1.5">
-          {loading ? 'Création...' : <><FileText className="w-4 h-4" /> Créer la facture</>}
-        </button>
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCreated} className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold px-5 py-2.5 rounded-lg">Annuler</button>
+          <button onClick={handleSubmit} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-5 py-2.5 rounded-lg flex items-center gap-1.5">
+            {loading ? 'Création...' : <><FileText className="w-4 h-4" /> Créer la facture</>}
+          </button>
+        </div>
       </div>
     </div>
   );

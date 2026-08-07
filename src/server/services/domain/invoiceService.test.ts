@@ -49,10 +49,13 @@ describe('InvoiceService.create — commission apporteur intégrée', () => {
         taxRate: 20,
         discount: 0,
         discountType: 'percentage',
-        shipping: 0,
+shipping: 0,
         commission: {
           affiliateId: 'aff-inv-1',
-          rate: 5, // 5% de chaque ligne
+          commissionItems: [
+            { productId: null, productName: 'Lait 1L', quantity: 2, sellPrice: 2000, commissionPerUnit: 100 },
+            { productId: null, productName: 'Sucre 1kg', quantity: 3, sellPrice: 1000, commissionPerUnit: 50 },
+          ],
           paymentSchedule: 'later',
           immediatePayment: 0,
         },
@@ -66,16 +69,16 @@ describe('InvoiceService.create — commission apporteur intégrée', () => {
     expect(result.id).toBeTruthy();
     expect(result.invoiceNumber).toMatch(/^FAC/);
 
-    // Commission attachée (montants retournés via attachCommission)
+    // Commission attachée au détail (renvoyée par attachCommission)
     expect(result.invoiceAffiliate).toBeTruthy();
     expect(result.invoiceAffiliate.affiliateName).toBe('Binta Sow');
-    // 5% de (2*2000 + 3*1000) = 5% de 7000 HT = 350
+    // 100*2 + 50*3 = 350
     expect(result.invoiceAffiliate.totalCommission).toBe(350);
 
-    // Lignes de commission par article
+    // Lignes de commission par article (commissions saisies telles quelles)
     expect(result.commissionItems.length).toBe(2);
     const lait = result.commissionItems.find((c: any) => c.productName === 'Lait 1L');
-    expect(lait.totalCommission).toBe(200); // 2 * (5% de 2000 = 100)
+    expect(lait.totalCommission).toBe(200);
     expect(lait.commissionPerUnit).toBe(100);
 
     // Ledger : crédits référence 'invoice'
