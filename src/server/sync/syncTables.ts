@@ -28,6 +28,8 @@ export const TABLE_MAPPINGS = [
   { sqliteName: 'commission_audit', pgName: 'commission_audit' },
   { sqliteName: 'sale_affiliates', pgName: 'sale_affiliates' },
   { sqliteName: 'sale_commission_items', pgName: 'sale_commission_items' },
+  { sqliteName: 'invoice_affiliates', pgName: 'invoice_affiliates' },
+  { sqliteName: 'invoice_commission_items', pgName: 'invoice_commission_items' },
   { sqliteName: 'audit_logs', pgName: 'audit_logs' },
   { sqliteName: 'delivery_note_audit', pgName: 'delivery_note_audit' },
   { sqliteName: 'roles', pgName: 'roles' },
@@ -80,6 +82,7 @@ export const TABLE_SYNC_PRIORITY: Record<string, number> = {
   invoice_items: 2, delivery_orders: 2, payments: 2, returns: 2, invoice_audit_log: 2,
   // 3 — dépendent de tables de profondeur 2
   sale_items: 3, sale_affiliates: 3, sale_commission_items: 3,
+  invoice_affiliates: 3, invoice_commission_items: 3,
   delivery_order_items: 3, return_items: 3, delivery_note_audit: 3,
 };
 

@@ -25,6 +25,27 @@ router.get('/sale/:saleId', authenticateToken, (req: AuthenticatedRequest, res: 
   }
 });
 
+router.post('/invoice/record', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const tenantId = req.user?.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'Aucun tenant actif' });
+    const result = commissionV2Service.recordInvoiceCommission(req.body, tenantId, req.user?.id, req.user?.name);
+    res.status(201).json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || "Erreur lors de l'enregistrement de la commission" });
+  }
+});
+
+router.get('/invoice/:invoiceId', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const tenantId = req.user?.tenantId;
+    const result = commissionV2Service.getInvoiceCommission(req.params.invoiceId, tenantId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur de chargement' });
+  }
+});
+
 router.get('/dashboard/enhanced', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenantId = req.query.tenantId as string || req.user?.tenantId;

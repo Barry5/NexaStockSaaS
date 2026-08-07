@@ -133,6 +133,98 @@ export class CommissionV2Service extends BaseService {
     return { saleAffiliateId: saId, totalCommission, immediatePayment: immediatePayment || 0, balanceDue: totalCommission - (immediatePayment || 0), schedule, commissionItems, balance: updatedBalance };
   }
 
+  /**
+   * Miroir vente pour les factures : enregistre l'association facture -> apporteur
+   * avec ses lignes de commission (invoice_commission_items) et le journal des
+   * commissions. À appeler DANS la transaction de création de la facture
+   * (l'id de facture existe déjà localement via le même runInTransaction).
+   */
+  recordInvoiceCommission(data: any, tenantId: string, userId?: string, userName?: string): any {
+    const { invoiceId, affiliateId, invoiceNumber, customerName, items, paymentSchedule, immediatePayment, paymentDueDate } = data;
+    if (!invoiceId || !affiliateId || !items) throw new Error('invoiceId, affiliateId et items requis');
+    const aff = db.prepare('SELECT * FROM affiliates WHERE id = ? AND tenantId = ?').get(affiliateId, tenantId) as any;
+    if (!aff) throw new Error('Apporteur introuvable');
+    const inv = db.prepare('SELECT * FROM invoices WHERE id = ? AND tenantId = ?').get(invoiceId, tenantId) as any;
+    if (!inv) throw new Error('Facture introuvable');
+
+    const schedule = paymentSchedule || 'immediate';
+    let totalCommission = 0;
+    let iaId = '';
+    let balanceDue = 0;
+    let dueDate: string | null = paymentDueDate || null;
+    const ledgerEntries: string[] = [];
+    const commissionItems: any[] = [];
+
+    this.runInTransaction(() => {
+      for (const item of items) {
+        const commPerUnit = item.commissionPerUnit || 0;
+        if (commPerUnit <= 0) continue;
+        const itemTotal = commPerUnit * item.quantity;
+        totalCommission += itemTotal;
+
+        const ciId = genId('ici');
+        db.prepare(`
+          INSERT INTO invoice_commission_items (id, invoiceId, affiliateId, productId, productName, quantity, sellPrice, commissionPerUnit, totalCommission, tenantId, createdAt)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        `).run(ciId, invoiceId, affiliateId, item.productId || null, item.productName, item.quantity, item.sellPrice || 0, commPerUnit, itemTotal, tenantId, now());
+        commissionItems.push({ id: ciId, ...item, totalCommission: itemTotal });
+
+        const currentBalance = this.getAffiliateBalance(affiliateId);
+        const ledgerId = genId('ledger');
+        db.prepare(`
+          INSERT INTO commission_ledger (id, affiliateId, type, reference, referenceType, description, credit, debit, balance, status, invoiceId, invoiceNumber, customerName, productName, quantity, sellPrice, commissionAmount, userId, userName, tenantId, createdAt)
+          VALUES (?,?,'commission',?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `).run(ledgerId, affiliateId, invoiceNumber || null, 'invoice', `Commission ${item.productName} x${item.quantity}`, itemTotal, currentBalance + itemTotal, 'pending', invoiceId, invoiceNumber || null, customerName || null, item.productName, item.quantity, item.sellPrice || 0, itemTotal, userId || null, userName || null, tenantId, now());
+        ledgerEntries.push(ledgerId);
+      }
+
+      if (totalCommission <= 0) throw new Error('Aucune commission à enregistrer');
+
+      iaId = genId('ia');
+      balanceDue = totalCommission - (immediatePayment || 0);
+      if (!dueDate) {
+        if (schedule === 'later') { const d = new Date(); d.setDate(d.getDate() + 30); dueDate = d.toISOString().split('T')[0]; }
+        else if (schedule === 'weekly') { const d = new Date(); d.setDate(d.getDate() + 7); dueDate = d.toISOString().split('T')[0]; }
+        else if (schedule === 'bi_weekly') { const d = new Date(); d.setDate(d.getDate() + 15); dueDate = d.toISOString().split('T')[0]; }
+        else if (schedule === 'end_of_month') { const d = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0); dueDate = d.toISOString().split('T')[0]; }
+      }
+
+      db.prepare(`
+        INSERT INTO invoice_affiliates (id, invoiceId, affiliateId, affiliateName, totalCommission, amountPaid, balanceDue, paymentSchedule, paymentDueDate, status, tenantId, createdAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(iaId, invoiceId, affiliateId, `${aff.firstName} ${aff.lastName}`, totalCommission, immediatePayment || 0, balanceDue, schedule, dueDate || null, immediatePayment && immediatePayment >= totalCommission ? 'paid' : 'pending', tenantId, now());
+
+      if (immediatePayment && immediatePayment > 0) {
+        const payId = genId('cmpay');
+        const ref = `CMP-${String(Date.now()).slice(-8)}`;
+        const currentBalance = this.getAffiliateBalance(affiliateId);
+        db.prepare(`
+          INSERT INTO commission_payments (id, reference, affiliateId, affiliateName, amount, method, currency, notes, ledgerIds, userId, userName, tenantId, createdAt, saleId, invoiceId, paymentDate, schedule)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `).run(payId, ref, affiliateId, `${aff.firstName} ${aff.lastName}`, immediatePayment, 'cash', 'GNF', 'Paiement immédiat', JSON.stringify(ledgerEntries), userId || null, userName || null, tenantId, now(), null, invoiceId, today(), 'immediate');
+        const entryId = genId('ledger');
+        db.prepare(`
+          INSERT INTO commission_ledger (id, affiliateId, type, reference, referenceType, description, credit, debit, balance, status, paymentId, userId, userName, tenantId, createdAt)
+          VALUES (?,?,'payment',?,?,?,0,?,?,?,?,?,?,?,?)
+        `).run(entryId, affiliateId, ref, 'payment', `Paiement immédiat ${fmt(immediatePayment)}`, immediatePayment, currentBalance - immediatePayment, 'paid', payId, userId || null, userName || null, tenantId, now());
+      }
+
+      this.addAudit(affiliateId, 'INVOICE_COMMISSION_RECORDED', `Commission de ${fmt(totalCommission)} enregistrée pour la facture ${invoiceNumber || invoiceId} (${schedule})`, tenantId, userId, userName);
+    });
+
+    try {
+      this.enqueueSyncFor('invoice_affiliates', iaId, 'CREATE', { id: iaId, invoiceId, affiliateId, affiliateName: `${aff.firstName} ${aff.lastName}`, totalCommission, amountPaid: immediatePayment || 0, balanceDue, paymentSchedule: schedule, paymentDueDate: dueDate || null, status: immediatePayment && immediatePayment >= totalCommission ? 'paid' : 'pending', tenantId, legacy_id: iaId, _table: 'invoice_affiliates' }, tenantId);
+    } catch (e) { /* la sync n'est pas bloquante */ }
+    const updatedBalance = this.getAffiliateBalance(affiliateId);
+    return { invoiceAffiliateId: iaId, totalCommission, immediatePayment: immediatePayment || 0, balanceDue: totalCommission - (immediatePayment || 0), schedule, commissionItems, balance: updatedBalance };
+  }
+
+  getInvoiceCommission(invoiceId: string, tenantId: string): { invoiceAffiliate: any; commissionItems: any[] } {
+    const invoiceAffiliate = db.prepare('SELECT * FROM invoice_affiliates WHERE invoiceId = ? AND tenantId = ?').get(invoiceId, tenantId) as any;
+    const commissionItems = db.prepare('SELECT * FROM invoice_commission_items WHERE invoiceId = ? AND tenantId = ?').all(invoiceId, tenantId);
+    return { invoiceAffiliate, commissionItems };
+  }
+
   getSaleCommission(saleId: string, tenantId: string): { saleAffiliate: any; commissionItems: any[] } {
     const saleAffiliate = db.prepare('SELECT * FROM sale_affiliates WHERE saleId = ? AND tenantId = ?').get(saleId, tenantId) as any;
     const commissionItems = db.prepare('SELECT * FROM sale_commission_items WHERE saleId = ? AND tenantId = ?').all(saleId, tenantId);
@@ -149,6 +241,7 @@ export class CommissionV2Service extends BaseService {
     const monthComm = db.prepare("SELECT COALESCE(SUM(credit),0) as c, COALESCE(SUM(debit),0) as d FROM commission_ledger WHERE tenantId = ? AND createdAt >= ?").get(tenantId, ms) as any;
     const monthCommission = (monthComm.c || 0) - (monthComm.d || 0);
     const totalToPay = (db.prepare("SELECT COALESCE(SUM(balanceDue),0) as bal FROM sale_affiliates WHERE tenantId = ? AND status IN ('pending','partially_paid')").get(tenantId) as any)?.bal || 0;
+    const totalToPayInvoice = (db.prepare("SELECT COALESCE(SUM(balanceDue),0) as bal FROM invoice_affiliates WHERE tenantId = ? AND status IN ('pending','partially_paid')").get(tenantId) as any)?.bal || 0;
     const totalPaid = (db.prepare("SELECT COALESCE(SUM(amount),0) as total FROM commission_payments WHERE tenantId = ?").get(tenantId) as any)?.total || 0;
     const salesWithComm = (db.prepare("SELECT COUNT(DISTINCT saleId) as cnt FROM sale_affiliates WHERE tenantId = ? AND createdAt >= ?").get(tenantId, d) as any)?.cnt || 0;
     const totalSalesToday = (db.prepare("SELECT COUNT(*) as cnt FROM sales WHERE tenantId = ? AND date >= ?").get(tenantId, d) as any)?.cnt || 0;
@@ -169,7 +262,7 @@ export class CommissionV2Service extends BaseService {
       FROM commission_ledger WHERE tenantId = ? AND createdAt >= date('now', '-12 months') GROUP BY month ORDER BY month ASC
     `).all(tenantId) as any[];
     return {
-      stats: { activeAffiliates, todayCommission, monthCommission, totalToPay, totalPaid, salesWithCommission: salesWithComm, salesWithoutCommission: Math.max(0, totalSalesToday - salesWithComm), totalSalesToday },
+      stats: { activeAffiliates, todayCommission, monthCommission, totalToPay: totalToPay + totalToPayInvoice, totalToPaySale: totalToPay, totalToPayInvoice, totalPaid, salesWithCommission: salesWithComm, salesWithoutCommission: Math.max(0, totalSalesToday - salesWithComm), totalSalesToday },
       topAffiliates, topProducts, statusBreakdown, monthlyStats,
     };
   }
@@ -207,13 +300,28 @@ export class CommissionV2Service extends BaseService {
   }
 
   updatePaymentSchedule(id: string, data: { paymentSchedule?: string; paymentDueDate?: string }, tenantId: string): any | null {
-    const sa = db.prepare('SELECT * FROM sale_affiliates WHERE id = ? AND tenantId = ?').get(id, tenantId) as any;
-    if (!sa) return null;
-    if (sa.status === 'paid') throw new Error('Commission déjà soldée');
+    let row = db.prepare('SELECT * FROM sale_affiliates WHERE id = ? AND tenantId = ?').get(id, tenantId) as any;
+    let table = 'sale_affiliates';
+    if (!row) {
+      row = db.prepare('SELECT * FROM invoice_affiliates WHERE id = ? AND tenantId = ?').get(id, tenantId) as any;
+      table = 'invoice_affiliates';
+    }
+    if (!row) return null;
+    if (row.status === 'paid') throw new Error('Commission déjà soldée');
     const { paymentSchedule, paymentDueDate } = data;
-    db.prepare('UPDATE sale_affiliates SET paymentSchedule = ?, paymentDueDate = ? WHERE id = ?').run(paymentSchedule || sa.paymentSchedule, paymentDueDate || sa.paymentDueDate, id);
-    this.addAudit(sa.affiliateId, 'PAYMENT_SCHEDULE_UPDATED', `Échéance modifiée: ${paymentSchedule || sa.paymentSchedule}`, tenantId);
-    return db.prepare('SELECT * FROM sale_affiliates WHERE id = ?').get(id);
+    db.prepare(`UPDATE ${table} SET paymentSchedule = ?, paymentDueDate = ? WHERE id = ?`).run(paymentSchedule || row.paymentSchedule, paymentDueDate || row.paymentDueDate, id);
+    this.addAudit(row.affiliateId, 'PAYMENT_SCHEDULE_UPDATED', `Échéance modifiée: ${paymentSchedule || row.paymentSchedule}`, tenantId);
+    return db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id);
+  }
+
+  // Retrouve une commission (vente ou facture) par son id local. Retourne un
+  // enregistrement normalisé avec sa table d'origine dans `docType`.
+  private findCommissionEntry(id: string, tenantId: string): any | null {
+    const sa = db.prepare('SELECT * FROM sale_affiliates WHERE id = ? AND tenantId = ?').get(id, tenantId) as any;
+    if (sa) return { ...sa, docType: 'sale' };
+    const ia = db.prepare('SELECT * FROM invoice_affiliates WHERE id = ? AND tenantId = ?').get(id, tenantId) as any;
+    if (ia) return { ...ia, docType: 'invoice' };
+    return null;
   }
 
   batchPay(saleAffiliateIds: string[], method: string | undefined, campaignName: string | undefined, tenantId: string, userId?: string, userName?: string): any {
@@ -223,27 +331,29 @@ export class CommissionV2Service extends BaseService {
     let totalPaidAmount = 0;
 
     this.runInTransaction(() => {
-      for (const saId of saleAffiliateIds) {
-        const sa = db.prepare('SELECT * FROM sale_affiliates WHERE id = ? AND tenantId = ? AND status IN (?,?)').get(saId, tenantId, 'pending', 'partially_paid') as any;
-        if (!sa || sa.balanceDue <= 0) continue;
-        const payAmount = sa.balanceDue;
+      for (const id of saleAffiliateIds) {
+        const entry = this.findCommissionEntry(id, tenantId);
+        if (!entry || !['pending', 'partially_paid'].includes(entry.status) || entry.balanceDue <= 0) continue;
+        const payAmount = entry.balanceDue;
         const payId = genId('cmpay');
         const ref = `CMP-${String(Date.now()).slice(-8)}`;
-        const aff = db.prepare('SELECT firstName, lastName FROM affiliates WHERE id = ?').get(sa.affiliateId) as any;
+        const aff = db.prepare('SELECT firstName, lastName FROM affiliates WHERE id = ?').get(entry.affiliateId) as any;
+        const saleId = entry.docType === 'sale' ? entry.saleId : null;
+        const invoiceId = entry.docType === 'invoice' ? entry.invoiceId : null;
         db.prepare(`
-          INSERT INTO commission_payments (id, reference, affiliateId, affiliateName, amount, method, currency, notes, userId, userName, tenantId, createdAt, saleId, paymentDate, schedule)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        `).run(payId, ref, sa.affiliateId, sa.affiliateName, payAmount, paymentMethod, 'GNF', campaignName ? `Campagne: ${campaignName}` : 'Paiement groupé', userId || null, userName || null, tenantId, now(), sa.saleId, today(), 'bulk');
-        db.prepare('UPDATE sale_affiliates SET amountPaid = amountPaid + ?, balanceDue = 0, status = ? WHERE id = ?').run(payAmount, 'paid', saId);
+          INSERT INTO commission_payments (id, reference, affiliateId, affiliateName, amount, method, currency, notes, userId, userName, tenantId, createdAt, saleId, invoiceId, paymentDate, schedule)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `).run(payId, ref, entry.affiliateId, entry.affiliateName, payAmount, paymentMethod, 'GNF', campaignName ? `Campagne: ${campaignName}` : 'Paiement groupé', userId || null, userName || null, tenantId, now(), saleId, invoiceId, today(), 'bulk');
+        db.prepare(`UPDATE ${entry.docType === 'sale' ? 'sale_affiliates' : 'invoice_affiliates'} SET amountPaid = amountPaid + ?, balanceDue = 0, status = 'paid' WHERE id = ?`).run(payAmount, id);
         totalPaidAmount += payAmount;
-        const currentBalance = this.getAffiliateBalance(sa.affiliateId);
+        const currentBalance = this.getAffiliateBalance(entry.affiliateId);
         const entryId = genId('ledger');
         db.prepare(`
           INSERT INTO commission_ledger (id, affiliateId, type, reference, referenceType, description, credit, debit, balance, status, paymentId, userId, userName, tenantId, createdAt)
           VALUES (?,?,'payment',?,?,?,0,?,?,?,?,?,?,?,?)
-        `).run(entryId, sa.affiliateId, ref, 'payment', campaignName ? `Paiement campagne: ${campaignName}` : `Paiement groupé ${fmt(payAmount)}`, payAmount, currentBalance - payAmount, 'paid', payId, userId || null, userName || null, tenantId, now());
-        this.addAudit(sa.affiliateId, 'BATCH_PAYMENT', `Paiement groupé ${fmt(payAmount)} (${campaignName || 'standard'})`, tenantId, userId, userName);
-        results.push({ saleAffiliateId: saId, affiliateName: sa.affiliateName, amount: payAmount, reference: ref });
+        `).run(entryId, entry.affiliateId, ref, 'payment', campaignName ? `Paiement campagne: ${campaignName}` : `Paiement groupé ${fmt(payAmount)}`, payAmount, currentBalance - payAmount, 'paid', payId, userId || null, userName || null, tenantId, now());
+        this.addAudit(entry.affiliateId, 'BATCH_PAYMENT', `Paiement groupé ${fmt(payAmount)} (${campaignName || 'standard'})`, tenantId, userId, userName);
+        results.push({ saleAffiliateId: id, affiliateName: entry.affiliateName, amount: payAmount, reference: ref });
       }
     });
 
@@ -251,11 +361,17 @@ export class CommissionV2Service extends BaseService {
   }
 
   getPending(tenantId: string): any[] {
-    return db.prepare(`
-      SELECT sa.*, s.invoiceNumber, s.customerName, s.date as saleDate, aff.firstName, aff.lastName, aff.phone, aff.city
+    const sales = db.prepare(`
+      SELECT sa.*, 'sale' as docType, s.invoiceNumber, s.customerName, s.date as saleDate, aff.firstName, aff.lastName, aff.phone, aff.city
       FROM sale_affiliates sa LEFT JOIN sales s ON sa.saleId = s.id LEFT JOIN affiliates aff ON sa.affiliateId = aff.id
-      WHERE sa.tenantId = ? AND sa.status IN ('pending','partially_paid') AND sa.balanceDue > 0 ORDER BY sa.createdAt DESC
+      WHERE sa.tenantId = ? AND sa.status IN ('pending','partially_paid') AND sa.balanceDue > 0
     `).all(tenantId) as any[];
+    const invoices = db.prepare(`
+      SELECT ia.*, 'invoice' as docType, i.invoiceNumber, i.customerName, i.date as saleDate, ia.invoiceId as docId, aff.firstName, aff.lastName, aff.phone, aff.city
+      FROM invoice_affiliates ia LEFT JOIN invoices i ON ia.invoiceId = i.id LEFT JOIN affiliates aff ON ia.affiliateId = aff.id
+      WHERE ia.tenantId = ? AND ia.status IN ('pending','partially_paid') AND ia.balanceDue > 0
+    `).all(tenantId) as any[];
+    return [...sales, ...invoices].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
 }
 

@@ -319,6 +319,43 @@ function InvoiceDetail({ invoiceId, onBack }: { invoiceId: string; onBack: () =>
         </div>
       )}
 
+      {invoice.invoiceAffiliate && (
+        <div className="bg-gray-900 border border-emerald-500/20 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-[10px] font-bold text-gray-300 uppercase tracking-wider font-mono">Apporteur d'affaires & commission</h3>
+            <StatusBadge status={invoice.invoiceAffiliate.status} labels={({ pending: 'À payer', partially_paid: 'Partiellement payé', paid: 'Payée' } as any)} />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <p className="text-[9px] font-mono text-gray-500">Apporteur</p>
+              <p className="text-xs font-bold text-white mt-0.5">{invoice.invoiceAffiliate.affiliateName}</p>
+            </div>
+            <div>
+              <p className="text-[9px] font-mono text-gray-500">Commission</p>
+              <p className="text-xs font-bold font-mono text-emerald-400 mt-0.5">{formatted(invoice.invoiceAffiliate.totalCommission)}</p>
+            </div>
+            <div>
+              <p className="text-[9px] font-mono text-gray-500">Reçu / Restant</p>
+              <p className="text-xs font-mono text-emerald-400 mt-0.5">{formatted(invoice.invoiceAffiliate.amountPaid || 0)} <span className="text-gray-600">/</span> <span className="text-amber-400">{formatted(invoice.invoiceAffiliate.balanceDue || 0)}</span></p>
+            </div>
+            <div>
+              <p className="text-[9px] font-mono text-gray-500">Échéance</p>
+              <p className="text-xs font-mono text-white mt-0.5">{invoice.invoiceAffiliate.paymentSchedule === 'immediate' ? 'Immédiate' : (invoice.invoiceAffiliate.paymentDueDate || '—')}</p>
+            </div>
+          </div>
+          {invoice.commissionItems && invoice.commissionItems.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-800">
+              {(invoice.commissionItems as any[]).map((c: any) => (
+                <div key={c.id} className="flex items-center justify-between text-[11px] py-0.5">
+                  <span className="text-gray-400">{c.productName} <span className="text-gray-600">x{c.quantity}</span></span>
+                  <span className="font-mono text-emerald-400">{formatted(c.totalCommission)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-1 border-b border-gray-800 overflow-x-auto">
         {['items', 'delivery', 'payments', 'returns', 'audit'].map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab as any)}
@@ -803,11 +840,16 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
   const [shipping, setShipping] = useState(0);
   const [notes, setNotes] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [commissionAffiliateId, setCommissionAffiliateId] = useState('');
+  const [commissionRate, setCommissionRate] = useState(0);
+  const [commissionSchedule, setCommissionSchedule] = useState('immediate');
+  const [commissionImmediate, setCommissionImmediate] = useState(0);
   const [loading, setLoading] = useState(false);
 
   const activeTenant = useMemo(() => db.tenants.find((t: any) => t.id === activeTenantId), [db.tenants, activeTenantId]);
   const tenantProducts = useMemo(() => db.products.filter((p: any) => p.tenantId === activeTenantId), [db.products, activeTenantId]);
   const customers = useMemo(() => db.customers.filter((c: any) => c.tenantId === activeTenantId), [db.customers, activeTenantId]);
+  const affiliates = useMemo(() => (db.affiliates || []).filter((a: any) => a.tenantId === activeTenantId && (a.status !== 'inactive')), [db.affiliates, activeTenantId]);
 
   const handleAddItem = () => {
     setItems(prev => [...prev, { productId: '', productName: '', quantity: 1, price: 0 }]);
@@ -839,6 +881,7 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
   const discAmount = discountType === 'percentage' ? subtotal * (discount / 100) : discount;
   const tax = subtotal * (taxRate / 100);
   const total = subtotal + tax - discAmount + shipping;
+  const commissionEstimate = commissionAffiliateId && commissionRate > 0 ? (subtotal * commissionRate / 100) : 0;
 
   const handleSubmit = async () => {
     if (items.length === 0) { addNotification('Ajoutez au moins un article', 'error'); return; }
@@ -849,7 +892,15 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
         body: JSON.stringify({
           customerId: customerId || null, customerName: customerName || null, customerPhone: customerPhone || null,
           customerEmail: customerEmail || null, items: items.map(i => ({ ...i, productSku: tenantProducts.find((p: any) => p.id === i.productId)?.sku || '' })),
-          taxRate, discount, discountType, shipping, notes, dueDate: dueDate || null
+          taxRate, discount, discountType, shipping, notes, dueDate: dueDate || null,
+          ...(commissionAffiliateId && commissionRate > 0 ? {
+            commission: {
+              affiliateId: commissionAffiliateId,
+              rate: commissionRate,
+              paymentSchedule: commissionSchedule,
+              immediatePayment: commissionSchedule === 'immediate' ? commissionEstimate : commissionImmediate || 0,
+            }
+          } : {})
         })
       });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
@@ -960,6 +1011,52 @@ function CreateInvoice({ onCreated }: { onCreated: () => void }) {
           <label className="text-[10px] font-mono text-gray-500 block mb-1">Date d'échéance (optionnelle)</label>
           <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white" />
         </div>
+      </div>
+
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-bold text-gray-300 uppercase tracking-wider font-mono">Apporteur d'affaires (commission)</h3>
+          {commissionAffiliateId && (
+            <button onClick={() => { setCommissionAffiliateId(''); setCommissionRate(0); setCommissionImmediate(0); }} className="text-[10px] font-mono text-red-400 hover:text-red-300 flex items-center gap-1">
+              <X className="w-3 h-3" /> Retirer
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] font-mono text-gray-500 block mb-1">Apporteur</label>
+            <select value={commissionAffiliateId} onChange={e => setCommissionAffiliateId(e.target.value)} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white">
+              <option value="">Aucun</option>
+              {affiliates.map((a: any) => <option key={a.id} value={a.id}>{a.firstName} {a.lastName}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-mono text-gray-500 block mb-1">Taux de commission (%)</label>
+            <input type="number" min="0" step="0.1" value={commissionRate} onChange={e => setCommissionRate(parseFloat(e.target.value) || 0)} disabled={!commissionAffiliateId} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white font-mono disabled:opacity-50" placeholder="0" />
+          </div>
+          <div>
+            <label className="text-[10px] font-mono text-gray-500 block mb-1">Échéance de paiement</label>
+            <select value={commissionSchedule} onChange={e => setCommissionSchedule(e.target.value)} disabled={!commissionAffiliateId} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white disabled:opacity-50">
+              <option value="immediate">Immédiate</option>
+              <option value="later">30 jours</option>
+              <option value="weekly">Hebdomadaire (7j)</option>
+              <option value="bi_weekly">Bi-hebdomadaire (15j)</option>
+              <option value="end_of_month">Fin de mois</option>
+            </select>
+          </div>
+          {commissionSchedule !== 'immediate' && (
+            <div>
+              <label className="text-[10px] font-mono text-gray-500 block mb-1">Acompte immédiat (optionnel)</label>
+              <input type="number" min="0" value={commissionImmediate} onChange={e => setCommissionImmediate(parseFloat(e.target.value) || 0)} disabled={!commissionAffiliateId} className="w-full bg-gray-950 border border-gray-800 rounded-lg p-2.5 text-xs text-white font-mono disabled:opacity-50" placeholder="0" />
+            </div>
+          )}
+        </div>
+        {commissionAffiliateId && commissionRate > 0 && (
+          <div className="flex items-center justify-between text-xs text-gray-400 pt-2 border-t border-gray-800">
+            <span>Commission estimée ({commissionRate}% du sous-total)</span>
+            <span className="font-mono font-bold text-emerald-400">{formatCurrency(commissionEstimate, activeTenant?.currency)}</span>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-3 justify-end">

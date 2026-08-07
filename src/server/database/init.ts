@@ -15,6 +15,7 @@ import { up as up013 } from './migrations/013_changelog_retry.js';
 import { up as up014 } from './migrations/014_invoice_counters.js';
 import { up as up015 } from './migrations/015_changelog_last_error.js';
 import { up as up016 } from './migrations/016_sync_conflicts.js';
+import { up as up017 } from './migrations/017_invoice_commissions.js';
 import { seed } from './seeds.js';
 import { importSnapshot } from './snapshot.js';
 
@@ -37,6 +38,7 @@ export function initializeDatabase() {
     up014(db);
     up015(db);
     up016(db);
+    up017(db);
     console.log('Tables created or already present.');
 
     seed(db);

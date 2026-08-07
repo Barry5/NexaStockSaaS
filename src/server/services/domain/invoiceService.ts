@@ -2,6 +2,7 @@ import { BaseService } from './baseService.js';
 import db from '../../database/db.js';
 import { randomUUID } from 'crypto';
 import { nextCounter } from '../../utils/counters.js';
+import { commissionV2Service } from './commissionV2Service.js';
 
 // UUID v4 (audit §2.6, P6) : élimine les collisions d'IDs entre appareils
 // (les anciens `inv-${Date.now()}-${random}` pouvaient se chevaucher à la même
@@ -109,6 +110,12 @@ export class InvoiceService extends BaseService {
     db.prepare('UPDATE invoices SET subtotal = ?, tax = ?, total = ? WHERE id = ?').run(subtotal, tax, total, invoiceId);
   }
 
+  private attachCommission(inv: any) {
+    const invoiceAffiliate = db.prepare('SELECT * FROM invoice_affiliates WHERE invoiceId = ? AND tenantId = ?').get(inv.id, inv.tenantId) as any || null;
+    const commissionItems = db.prepare('SELECT * FROM invoice_commission_items WHERE invoiceId = ? AND tenantId = ?').all(inv.id, inv.tenantId) as any[];
+    return { ...inv, invoiceAffiliate, commissionItems };
+  }
+
   getAll(tenantId: string): any[] {
     const invoices = db.prepare('SELECT * FROM invoices WHERE tenantId = ? ORDER BY date DESC').all(tenantId) as any[];
     return invoices.map((inv: any) => {
@@ -136,11 +143,11 @@ export class InvoiceService extends BaseService {
       return { ...r, items: ri };
     });
     const auditLogs = db.prepare('SELECT * FROM invoice_audit_log WHERE invoiceId = ? ORDER BY timestamp ASC').all(inv.id);
-    return { ...inv, items, deliveryOrders: dosWithItems, payments, returns: returnsWithItems, auditLogs };
+    return this.attachCommission({ ...inv, items, deliveryOrders: dosWithItems, payments, returns: returnsWithItems, auditLogs });
   }
 
   create(data: any, tenantId: string, userId?: string, userName?: string): any {
-    const { customerId, customerName, customerPhone, customerEmail, customerAddress, items, taxRate, discount, discountType, shipping, notes, termsConditions, dueDate } = data;
+    const { customerId, customerName, customerPhone, customerEmail, customerAddress, items, taxRate, discount, discountType, shipping, notes, termsConditions, dueDate, commission } = data;
     if (!items || items.length === 0) throw new Error('Au moins un article requis');
 
     const id = genId('inv');
@@ -178,11 +185,36 @@ export class InvoiceService extends BaseService {
       const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
       this.enqueueSync('CREATE', id, { ...invoice, legacy_id: id }, tenantId);
       this.addAuditLog(id, 'INVOICE_CREATED', `Facture ${invoiceNumber} créée avec ${items.length} article(s)`, userId, userName);
+
+      // Apporteur d'affaires optionnel : la commission est calculée à partir du
+      // taux (commission.rate, % du prix HT de chaque ligne) et enregistrée DANS
+      // la même transaction (invoice_affiliates + invoice_commission_items +
+      // commission_ledger), puis synchronisée comme les ventes.
+      if (commission?.affiliateId && (commission.rate || 0) > 0) {
+        const rate = Number(commission.rate);
+        const commissionItems = invoiceItems.map((ii: any) => ({
+          productId: ii.productId,
+          productName: ii.productName,
+          quantity: ii.quantity,
+          sellPrice: ii.price,
+          commissionPerUnit: Number((ii.price * rate / 100).toFixed(2)),
+        }));
+        commissionV2Service.recordInvoiceCommission({
+          invoiceId: id,
+          affiliateId: commission.affiliateId,
+          invoiceNumber,
+          customerName: customerName || null,
+          items: commissionItems,
+          paymentSchedule: commission.paymentSchedule,
+          immediatePayment: commission.immediatePayment,
+          paymentDueDate: commission.paymentDueDate,
+        }, tenantId, userId, userName);
+      }
     });
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
     const createdItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(id);
-    return { ...invoice, items: createdItems, deliveryOrders: [], payments: [], returns: [] };
+    return this.attachCommission({ ...invoice, items: createdItems, deliveryOrders: [], payments: [], returns: [] });
   }
 
   update(id: string, data: any, tenantId: string, userId?: string, userName?: string): any | null {

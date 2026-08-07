@@ -9,6 +9,7 @@ export const TENANT_SCOPED_TABLES = new Set([
   'subscription_payments', 'invoices', 'delivery_orders', 'payments', 'returns',
   'affiliates', 'commission_rules', 'commission_ledger', 'commission_payments',
   'commission_audit', 'sale_affiliates', 'sale_commission_items',
+  'invoice_affiliates', 'invoice_commission_items',
   'delivery_note_audit', 'tenant_modules', 'gdrive_tokens',
 ]);
 
