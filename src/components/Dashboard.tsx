@@ -8,30 +8,62 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, BarChart, 
 import { useDB, useApp } from '../context';
 import { formatCurrency } from '../utils';
 import { CHART_COLORS } from '../constants';
+import { computeRevenueBreakdown, buildDailyRevenueSeries, mergeTransactions, dateKey, toISOKey } from '../utils/revenue';
+import type { Invoice } from '../types';
 
 const COLORS = CHART_COLORS;
 
 function useDashboardData() {
   const { db } = useDB();
   const { activeTenantId, setCurrentTab } = useApp();
+  const today = new Date();
 
   const activeTenant = useMemo(() => db.tenants.find(t => t.id === activeTenantId), [db.tenants, activeTenantId]);
   const tenantProducts = useMemo(() => db.products.filter(p => p.tenantId === activeTenantId), [db.products, activeTenantId]);
   const tenantSales = useMemo(() => db.sales.filter(s => s.tenantId === activeTenantId), [db.sales, activeTenantId]);
+  const tenantInvoices = useMemo(() => (db.invoices || []).filter(i => i.tenantId === activeTenantId), [db.invoices, activeTenantId]);
   const tenantExpenses = useMemo(() => db.expenses.filter(e => e.tenantId === activeTenantId), [db.expenses, activeTenantId]);
   const tenantLoans = useMemo(() => db.loans.filter(l => l.tenantId === activeTenantId), [db.loans, activeTenantId]);
 
-  const totalRevenue = useMemo(() => tenantSales.reduce((acc, s) => acc + s.total, 0), [tenantSales]);
+  // CA = ventes comptoir + factures validées (règles accrual, hors brouillons/annulées/avoir déduit)
+  const revenueBreakdown = useMemo(
+    () => computeRevenueBreakdown(tenantSales, tenantInvoices as Invoice[]),
+    [tenantSales, tenantInvoices]
+  );
+  const totalRevenue = revenueBreakdown.totalRevenue;
+  const invoiceRevenue = revenueBreakdown.invoiceRevenue;
+  const posRevenue = revenueBreakdown.posRevenue;
 
-  const totalCostOfGoodsSold = useMemo(() =>
-    tenantSales.reduce((acc, s) => {
+  // CA Aujourd'hui (comptoir + factures validées du jour)
+  const todayKey = toISOKey(today);
+  const todayRevenue = useMemo(() => {
+    const posToday = tenantSales.filter(s => toISOKey(new Date(s.date)) === todayKey).reduce((a, s) => a + s.total, 0);
+    const invToday = (tenantInvoices as Invoice[])
+      .filter(i => i.status === 'validated' && toISOKey(new Date(i.date)) === todayKey)
+      .reduce((acc, i) => acc + (i.type === 'credit_note' ? -i.total : i.total), 0);
+    return { pos: posToday, invoices: invToday, total: posToday + invToday };
+  }, [tenantSales, tenantInvoices, todayKey]);
+
+  const totalCostOfGoodsSold = useMemo(() => {
+    const salesCogs = tenantSales.reduce((acc, s) => {
       const saleCOGS = s.items.reduce((itemAcc, item) => {
         const prod = db.products.find(p => p.id === item.productId);
         const buyPrice = prod ? prod.buyPrice : item.price * 0.6;
         return itemAcc + (buyPrice * item.quantity);
       }, 0);
       return acc + saleCOGS;
-    }, 0), [tenantSales, db.products]);
+    }, 0);
+
+    const invoiceCogs = (tenantInvoices as Invoice[])
+      .filter(i => i.status === 'validated')
+      .reduce((acc, i) => acc + (i.items || []).reduce((itemAcc, item) => {
+        const prod = db.products.find(p => p.id === item.productId);
+        const buyPrice = prod ? prod.buyPrice : item.price * 0.6;
+        return itemAcc + (buyPrice * item.quantity);
+      }, 0), 0);
+
+    return salesCogs + invoiceCogs;
+  }, [tenantSales, tenantInvoices, db.products]);
 
   const totalExpenses = useMemo(() =>
     tenantExpenses.filter(e => e.status === 'paye').reduce((acc, e) => acc + e.amount, 0), [tenantExpenses]);
@@ -56,19 +88,28 @@ function useDashboardData() {
   }, [tenantLoans, db.customers, activeTenantId]);
 
   const financialTrendData = useMemo(() => {
-    const dates: Record<string, { date: string; revenue: number; expenses: number; profit: number }> = {};
-    const baseDate = new Date('2026-07-14');
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(baseDate);
-      d.setDate(baseDate.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-      dates[dateStr] = { date: d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }), revenue: 0, expenses: 0, profit: 0 };
-    }
-    tenantSales.forEach(s => { const ds = s.date.split('T')[0]; if (dates[ds]) dates[ds].revenue += s.total; });
-    tenantExpenses.forEach(e => { if (e.status === 'paye' && dates[e.date]) dates[e.date].expenses += e.amount; });
-    Object.keys(dates).forEach(key => { dates[key].profit = dates[key].revenue - dates[key].expenses; });
-    return Object.values(dates);
-  }, [tenantSales, tenantExpenses]);
+    const points = buildDailyRevenueSeries(tenantSales, tenantInvoices as Invoice[], 7, today);
+    const expenseByDate = new Map<string, number>();
+    tenantExpenses.forEach(e => { if (e.status === 'paye') expenseByDate.set(dateKey(e.date), (expenseByDate.get(dateKey(e.date)) || 0) + e.amount); });
+    return points.map(p => ({
+      date: p.label,
+      revenue: p.total,
+      pos: p.pos,
+      invoices: p.invoices,
+      expenses: expenseByDate.get(p.date) || 0,
+      profit: p.total - (expenseByDate.get(p.date) || 0),
+    }));
+  }, [tenantSales, tenantInvoices, tenantExpenses]);
+
+  const recentTransactions = useMemo(
+    () => mergeTransactions(tenantSales, tenantInvoices as Invoice[]),
+    [tenantSales, tenantInvoices]
+  );
+
+  const dailyRevenueSeries = useMemo(
+    () => buildDailyRevenueSeries(tenantSales, tenantInvoices as Invoice[], 7, today),
+    [tenantSales, tenantInvoices, today]
+  );
 
   const stockByCategoryData = useMemo(() => {
     const cats: Record<string, { name: string; value: number }> = {};
@@ -81,14 +122,20 @@ function useDashboardData() {
 
   const formatted = (val: number) => formatCurrency(val, activeTenant?.currency);
 
-  return { activeTenant, tenantProducts, tenantSales, totalRevenue, totalCostOfGoodsSold, totalExpenses, totalProfit, totalStockValue, totalStockPotentialValue, lowStockItems, debtStats, financialTrendData, stockByCategoryData, formatted, onNavigate: setCurrentTab };
+  return {
+    activeTenant, tenantProducts, tenantSales, totalRevenue, posRevenue, invoiceRevenue, todayRevenue,
+    totalCostOfGoodsSold, totalExpenses, totalProfit, totalStockValue, totalStockPotentialValue,
+    lowStockItems, debtStats, financialTrendData, stockByCategoryData, recentTransactions,
+    dailyRevenueSeries, formatted, onNavigate: setCurrentTab
+  };
 }
 
 function DashboardInner() {
   const {
-    activeTenant, tenantProducts, tenantSales, totalRevenue, totalProfit, totalExpenses, totalStockValue,
+    activeTenant, tenantProducts, tenantSales, totalRevenue, posRevenue, invoiceRevenue, todayRevenue,
+    totalProfit, totalExpenses, totalStockValue,
     totalStockPotentialValue, lowStockItems, debtStats, financialTrendData,
-    stockByCategoryData, formatted, onNavigate
+    stockByCategoryData, recentTransactions, dailyRevenueSeries, formatted, onNavigate
   } = useDashboardData();
 
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -179,7 +226,7 @@ function DashboardInner() {
       <table style="font-weight:bold;"><tr><td>SOUS-TOTAL</td><td style="text-align:right;">${sale.subtotal.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} ${activeTenant?.currency || 'EUR'}</td></tr>
       <tr><td>REMISE</td><td style="text-align:right;">-${sale.discount.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} ${activeTenant?.currency || 'EUR'}</td></tr>
       <tr><td>TVA (${sale.taxRate || 20}%)</td><td style="text-align:right;">${sale.tax.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} ${activeTenant?.currency || 'EUR'}</td></tr>
-      <tr style="font-size:12px;border-top:1px dashed #000;"><td style="padding-top:6px;">NET A PAYER (${sale.paymentMethod.toUpperCase()})</td><td style="padding-top:6px;text-align:right;">${sale.total.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} ${activeTenant?.currency || 'EUR'}</td></tr></table>
+      <tr style="font-size:12px;border-top:1px dashed #000;"><td style="padding-top:6px;">NET A PAYER (${(sale.paymentMethod || sale.paymentStatus || 'FACTURE').toUpperCase()})</td><td style="padding-top:6px;text-align:right;">${sale.total.toLocaleString('fr-FR', { minimumFractionDigits: 2 })} ${activeTenant?.currency || 'EUR'}</td></tr></table>
       <div class="divider"></div>
       <div class="text-center"><p>Merci pour votre confiance !</p><p style="font-size:8px;margin-top:8px;">${sale.invoiceNumber}</p></div>
       <script>window.onload=function(){window.print();};<\/script></body></html>`);
@@ -220,7 +267,11 @@ function DashboardInner() {
           <div className="mt-4">
             <p className="text-xs font-medium text-gray-400">Chiffre d'Affaires (Revenus)</p>
             <h3 className="text-2xl font-bold font-mono text-white mt-1">{formatted(totalRevenue)}</h3>
-            <p className="text-[10px] text-gray-500 mt-1">Cumulé sur les ventes du point de vente</p>
+            <p className="text-[10px] text-gray-500 mt-1">CA du jour : <span className="text-emerald-400 font-semibold">{formatted(todayRevenue.total)}</span></p>
+            <div className="flex gap-3 mt-1.5 text-[10px] font-mono text-gray-400">
+              <span>Comptoir : <strong className="text-blue-400">{formatted(posRevenue)}</strong></span>
+              <span>Factures : <strong className="text-violet-400">{formatted(invoiceRevenue)}</strong></span>
+            </div>
           </div>
         </motion.div>
 
@@ -286,9 +337,10 @@ function DashboardInner() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-gray-900 border border-gray-800 p-5 rounded-2xl lg:col-span-2 flex flex-col justify-between">
           <div className="flex justify-between items-center mb-6">
-            <div><h3 className="text-sm font-semibold font-display text-white">Analyse Financière (Derniers 7 Jours)</h3><p className="text-xs text-gray-500">Tendances quotidiennes du chiffre d'affaires et bénéfices</p></div>
+            <div><h3 className="text-sm font-semibold font-display text-white">Analyse Financière (Derniers 7 Jours)</h3><p className="text-xs text-gray-500">Tendances quotidiennes du chiffre d'affaires (comptoir + factures) et bénéfices</p></div>
             <div className="flex gap-4 text-xs font-mono">
-              <span className="flex items-center gap-1.5 text-brand-blue"><span className="w-2.5 h-2.5 rounded-full bg-brand-blue inline-block"></span> Ventes</span>
+              <span className="flex items-center gap-1.5 text-brand-blue"><span className="w-2.5 h-2.5 rounded-full bg-brand-blue inline-block"></span> Ventes comptoir</span>
+              <span className="flex items-center gap-1.5 text-violet-400"><span className="w-2.5 h-2.5 rounded-full bg-violet-400 inline-block"></span> Factures</span>
               <span className="flex items-center gap-1.5 text-brand-green"><span className="w-2.5 h-2.5 rounded-full bg-brand-green inline-block"></span> Bénéfice</span>
             </div>
           </div>
@@ -297,13 +349,15 @@ function DashboardInner() {
               <AreaChart data={financialTrendData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2563EB" stopOpacity={0.2}/><stop offset="95%" stopColor="#2563EB" stopOpacity={0}/></linearGradient>
+                  <linearGradient id="colorInvoice" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.2}/><stop offset="95%" stopColor="#8B5CF6" stopOpacity={0}/></linearGradient>
                   <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.2}/><stop offset="95%" stopColor="#10B981" stopOpacity={0}/></linearGradient>
                 </defs>
                 <XAxis dataKey="date" stroke="#4B5563" fontSize={10} tickLine={false} axisLine={false} />
                 <YAxis stroke="#4B5563" fontSize={10} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={{ backgroundColor: '#111827', borderColor: '#1F2937', color: '#fff', borderRadius: '12px' }} labelStyle={{ fontWeight: 'bold', fontSize: '11px', color: '#9CA3AF' }} />
-                <Area type="monotone" dataKey="revenue" stroke="#2563EB" strokeWidth={2} fillOpacity={1} fill="url(#colorRevenue)" />
-                <Area type="monotone" dataKey="profit" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorProfit)" />
+                <Area type="monotone" dataKey="pos" name="Comptoir" stackId="rev" stroke="#2563EB" strokeWidth={2} fillOpacity={1} fill="url(#colorRevenue)" />
+                <Area type="monotone" dataKey="invoices" name="Factures" stackId="rev" stroke="#8B5CF6" strokeWidth={2} fillOpacity={1} fill="url(#colorInvoice)" />
+                <Area type="monotone" dataKey="profit" name="Bénéfice" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorProfit)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -365,34 +419,59 @@ function DashboardInner() {
 
         <div className="bg-gray-900 border border-gray-800 p-5 rounded-2xl">
           <div className="flex justify-between items-center mb-4">
-            <div><h3 className="text-sm font-semibold font-display text-white">Ventes Récentes</h3><p className="text-xs text-gray-500">Derniers reçus générés par le terminal POS</p></div>
+            <div><h3 className="text-sm font-semibold font-display text-white">Ventes Récentes</h3><p className="text-xs text-gray-500">Toutes les transactions : point de vente et factures ERP</p></div>
             <div className="flex items-center gap-2">
               <button onClick={() => setIsExportModalOpen(true)} className="text-xs font-semibold text-brand-green bg-emerald-500/5 hover:bg-emerald-500/10 px-2.5 py-1.5 border border-emerald-500/10 rounded-xl flex items-center gap-1.5 transition"><Printer className="w-3.5 h-3.5" /> Exporter Rapport PDF</button>
               <button onClick={() => onNavigate('pos')} className="text-xs font-semibold text-brand-blue hover:underline bg-blue-500/5 hover:bg-blue-500/10 px-2.5 py-1.5 border border-blue-500/10 rounded-xl transition">Nouveau reçu</button>
             </div>
           </div>
           <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
-            {tenantSales.length > 0 ? tenantSales.slice().reverse().map(sale => (
-              <div key={sale.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-950/80 border border-gray-800 hover:border-gray-700 transition">
+            {recentTransactions.length > 0 ? recentTransactions.slice(0, 8).map(tx => (
+              <div key={tx.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-950/80 border border-gray-800 hover:border-gray-700 transition">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold font-mono text-brand-blue">{sale.invoiceNumber}</span>
-                    <span className={`text-[9px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ${sale.paymentMethod === 'credit' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-emerald-500/10 text-brand-green border border-emerald-500/20'}`}>{sale.paymentMethod}</span>
+                    <span className="text-xs font-bold font-mono text-brand-blue">{tx.reference}</span>
+                    {tx.source === 'pos' ? (
+                      <span className={`text-[9px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ${tx.method === 'credit' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-emerald-500/10 text-brand-green border border-emerald-500/20'}`}>{tx.method}</span>
+                    ) : (
+                      <span className="text-[9px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20">Facture</span>
+                    )}
                   </div>
-                  <p className="text-[10px] text-gray-400 mt-1">{sale.items.length} article{sale.items.length > 1 ? 's' : ''} • Client : <strong className="text-gray-300">{sale.customerName || 'Passager'}</strong></p>
-                  <p className="text-[9px] text-gray-500 font-mono">{new Date(sale.date).toLocaleString('fr-FR')}</p>
+                  <p className="text-[10px] text-gray-400 mt-1">{tx.itemCount} article{tx.itemCount > 1 ? 's' : ''} • Client : <strong className="text-gray-300">{tx.customerName}</strong></p>
+                  <p className="text-[9px] text-gray-500 font-mono">{new Date(tx.date).toLocaleString('fr-FR')}</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="text-right"><span className="text-xs font-mono font-bold text-white block">{formatted(sale.total)}</span><span className="text-[9px] text-gray-500 block">Vendu par {sale.employeeName}</span></div>
-                  <button onClick={() => handlePrintSingleSalePDF(sale)} title="Imprimer / Facture PDF" className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition border border-gray-700"><FileText className="w-3.5 h-3.5" /></button>
+                  <div className="text-right"><span className="text-xs font-mono font-bold text-white block">{formatted(tx.total)}</span><span className="text-[9px] text-gray-500 block">{tx.source === 'pos' ? `Vendu par ${tx.employeeName}` : 'Facture validée'}</span></div>
+                  <button onClick={() => handlePrintSingleSalePDF(tx.raw)} title="Imprimer / PDF" className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition border border-gray-700"><FileText className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
             )) : (
               <div className="flex flex-col items-center justify-center py-10 text-center text-gray-500">
-                <ShoppingBag className="w-8 h-8 text-gray-700 mb-2" /><p className="text-xs font-semibold text-gray-400">Aucune vente enregistrée.</p><p className="text-[10px] text-gray-500 mt-0.5">Utilisez le point de vente pour initier une transaction.</p>
+                <ShoppingBag className="w-8 h-8 text-gray-700 mb-2" /><p className="text-xs font-semibold text-gray-400">Aucune vente enregistrée.</p><p className="text-[10px] text-gray-500 mt-0.5">Utilisez le point de vente ou créez une facture pour initier une transaction.</p>
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      <div className="bg-gray-900 border border-gray-800 p-5 rounded-2xl">
+        <div className="flex justify-between items-center mb-4">
+          <div><h3 className="text-sm font-semibold font-display text-white">Chiffre d'Affaires Quotidien</h3><p className="text-xs text-gray-500">Répartition comptoir / factures sur les 7 derniers jours</p></div>
+          <Calendar className="w-4 h-4 text-gray-500" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2">
+          {dailyRevenueSeries.length > 0 ? dailyRevenueSeries.map((day, idx) => (
+            <div key={idx} className="bg-gray-950/80 border border-gray-800 rounded-xl p-3">
+              <p className="text-[9px] uppercase tracking-wider text-gray-500 font-mono">{day.label}</p>
+              <p className="text-base font-bold font-mono text-white mt-1">{formatted(day.total)}</p>
+              <div className="mt-1.5 space-y-0.5 text-[9px] font-mono">
+                <span className="block text-blue-400">Comptoir : {formatted(day.pos)}</span>
+                <span className="block text-violet-400">Factures : {formatted(day.invoices)}</span>
+              </div>
+            </div>
+          )) : (
+            <p className="text-xs text-gray-500">Aucune donnée.</p>
+          )}
         </div>
       </div>
 
