@@ -11,6 +11,10 @@
     "data:save": "tsx src/server/database/snapshot.ts export",
     "data:restore": "tsx src/server/database/snapshot.ts import",
     "lint": "tsc --noEmit",
+    "supabase:push": "supabase db push --confirm",
+    "supabase:check": "node --import tsx scripts/sync-invoices.mjs",
+    "sync:invoices": "node --import tsx scripts/sync-invoices.mjs",
+    "sync:worker": "node --loader tsx scripts/supabase-worker.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

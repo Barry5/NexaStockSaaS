@@ -246,11 +246,14 @@ export async function fetchUuidMappings(tableName: string): Promise<{ legacy_id:
 
 export async function countRemoteRows(
   table: string,
+  identityCol: string = 'id',
 ): Promise<{ count: number | null; error: any }> {
   const client = getAdminClient();
+  // Certaines tables (module_definitions, gdrive_tokens) n'ont PAS de colonne
+  // `id` côté PG : le comptage doit se faire sur leur clé naturelle.
   const { count, error } = await client
     .from(table)
-    .select('id', { count: 'exact', head: true });
+    .select(identityCol, { count: 'exact', head: true });
   return { count, error };
 }
 

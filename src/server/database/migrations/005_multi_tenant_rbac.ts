@@ -90,13 +90,12 @@ export function up(db: Database) {
     VALUES (?, ?, ?, 1)
   `);
 
-  const now = Date.now();
-  let seq = 0;
+  // Ids déterministes (pm-<planId>-<moduleKey>) : même format que seeds.ts,
+  // sinon un re-seed/restauration crée des doublons côté PostgreSQL.
   for (const pm of planModulesSeed) {
     if (!existingPlanIds.has(pm.planId)) continue;
     for (const mk of pm.modules) {
-      insertPlanModule.run(`pm-${now}-${seq}`, pm.planId, mk);
-      seq++;
+      insertPlanModule.run(`pm-${pm.planId}-${mk}`, pm.planId, mk);
     }
   }
 }

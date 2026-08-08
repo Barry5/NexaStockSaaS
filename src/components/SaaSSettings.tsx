@@ -36,7 +36,8 @@ import {
   Key,
   HelpCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Server
 } from 'lucide-react';
 import type { Tenant, User, SubscriptionPlan, UserRole, SubscriptionPayment, PricingPlan } from '../types';
 import { useDB, useApp } from '../context';
@@ -49,6 +50,7 @@ import SaaSSaasPanel from './settings/SaaSSaasPanel';
 import TeamSettings from './settings/TeamSettings';
 import TenantSettings from './settings/TenantSettings';
 import BackupSettings from './settings/BackupSettings';
+import AdminBackupCenter from './admin/AdminBackupCenter';
 
 
 export default function SaaSSettings() {
@@ -65,11 +67,11 @@ export default function SaaSSettings() {
   const [passwordVisible, setPasswordVisible] = useState(false);
 
   const isSuperAdmin = activeUser?.role === 'superadmin';
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'boutique' | 'saas' | 'team' | 'tenants' | 'backup'>('boutique');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'boutique' | 'saas' | 'team' | 'tenants' | 'backup' | 'backupcenter'>('boutique');
 
-  // Redirect away from tenants tab if not superadmin
+  // Redirect away from superadmin tabs if not superadmin
   React.useEffect(() => {
-    if (activeSettingsTab === 'tenants' && !isSuperAdmin) {
+    if ((activeSettingsTab === 'tenants' || activeSettingsTab === 'backupcenter') && !isSuperAdmin) {
       setActiveSettingsTab('boutique');
     }
   }, [activeSettingsTab, isSuperAdmin]);
@@ -661,6 +663,16 @@ export default function SaaSSettings() {
             <Globe className="w-3.5 h-3.5" /> Multi-Boutiques (Isolation SaaS)
           </button>
         )}
+        {isSuperAdmin && (
+          <button
+            onClick={() => setActiveSettingsTab('backupcenter')}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-lg transition ${
+              activeSettingsTab === 'backupcenter' ? 'bg-violet-600 text-white shadow-md' : 'text-gray-400 hover:text-white hover:bg-gray-850'
+            }`}
+          >
+            <Server className="w-3.5 h-3.5" /> Sauvegardes Système (Root)
+          </button>
+        )}
         <button
           onClick={() => setActiveSettingsTab('backup')}
           className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-lg transition ${
@@ -820,6 +832,13 @@ export default function SaaSSettings() {
               isSuperAdmin={isSuperAdmin}
               db={db}
             />
+          </motion.div>
+        )}
+
+        {/* TAB: SAUVEGARDES SYSTÈME (SUPER ADMIN) */}
+        {activeSettingsTab === 'backupcenter' && (
+          <motion.div key="backupcenter" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+            <AdminBackupCenter db={db} />
           </motion.div>
         )}
 

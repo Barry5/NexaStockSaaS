@@ -18,13 +18,42 @@ export function seed(db: Database) {
       VALUES (?, ?, ?, 1)
     `);
 
-    const now = Date.now();
-    let seq = 0;
+    // Ids DÉTERMINISTES : pm-<planId>-<moduleKey>. Ce seed étant rejoué à
+    // chaque démarrage (et après wipe/restauration de backup), l'ancien format
+    // pm-<timestamp>-<seq> fabriquait un id différent à chaque lancement ->
+    // nouvel UUID côté PG à chaque repousse du worker (pollution plan_modules :
+    // 1058 lignes en doublon). L'id stable garantit que l'upsert PG
+    // (onConflict: id) met à jour la ligne existante au lieu d'en créer une.
     for (const pm of planModulesSeed) {
       if (!existingPlanIds.has(pm.planId)) continue;
       for (const mk of pm.modules) {
-        insertPlanModule.run(`pm-${now}-${seq}`, pm.planId, mk);
-        seq++;
+        insertPlanModule.run(`pm-${pm.planId}-${mk}`, pm.planId, mk);
+      }
+    }
+
+    // Auto-guérison : migre les anciennes lignes pm-<timestamp>-<seq> vers
+    // l'id déterministe, en remappant sync_uuid_map pour conserver les UUID
+    // PG déjà existants (pas de nouveau UUID -> pas de doublon côté PG).
+    const legacyIdRegex = /^pm-\d{13}-\d+$/;
+    const allRows = db.prepare('SELECT id, planId, moduleKey FROM plan_modules').all() as { id: string; planId: string; moduleKey: string }[];
+    for (const row of allRows) {
+      if (!legacyIdRegex.test(row.id)) continue;
+      const newId = `pm-${row.planId}-${row.moduleKey}`;
+      if (newId === row.id) continue;
+      if (db.prepare('SELECT 1 FROM plan_modules WHERE id = ?').get(newId)) continue;
+      try {
+        db.prepare('UPDATE sync_uuid_map SET sqlite_id = ? WHERE sqlite_id = ?').run(newId, row.id);
+      } catch { /* table absente (vieille base) : mapping ignoré */ }
+      db.prepare('UPDATE plan_modules SET id = ? WHERE id = ?').run(newId, row.id);
+    }
+
+    // Purge des mappings pm-* orphelins (ids de seeds antérieurs sans ligne).
+    const orphans = db.prepare("SELECT sqlite_id FROM sync_uuid_map WHERE sqlite_id LIKE 'pm-%'").all() as { sqlite_id: string }[];
+    if (orphans.length > 0) {
+      const existsStmt = db.prepare('SELECT 1 FROM plan_modules WHERE id = ?');
+      const deleteStmt = db.prepare('DELETE FROM sync_uuid_map WHERE sqlite_id = ?');
+      for (const o of orphans) {
+        if (!existsStmt.get(o.sqlite_id)) deleteStmt.run(o.sqlite_id);
       }
     }
   };

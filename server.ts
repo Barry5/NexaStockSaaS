@@ -81,6 +81,7 @@ import deliveryNotesRouter from './src/server/routes/delivery_notes.js';
 import rbacRouter from './src/server/routes/rbac.js';
 import modulesRouter from './src/server/routes/modules.js';
 import syncRouter, { compileCompleteState } from './src/server/routes/sync.js';
+import adminBackupsRouter from './src/server/routes/adminBackups.js';
 
 // Middlewares
 import { errorHandler } from './src/server/middleware/errorHandler.js';
@@ -186,6 +187,8 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Backup endpoints (superadmin only)
+app.use('/api/admin', adminBackupsRouter);
+
 app.post('/api/admin/backup', authenticate, requireRole(['superadmin']), (req, res, next) => {
   try {
     const backupPath = createBackup();

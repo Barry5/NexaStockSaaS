@@ -21,12 +21,12 @@ const ALWAYS_EXCLUDED_COLUMNS = new Set(['version']);
 // D'après 001_full_schema.sql, certaines tables n'ont PAS de colonne updated_at
 // ou d'autres colonnes locales qui existent seulement dans SQLite.
 const TABLE_EXCLUDED_COLUMNS: Record<string, Set<string>> = {
-  permissions: new Set(['updated_at']),
-  module_definitions: new Set(['updated_at']),
-  tenant_modules: new Set(['updated_at']),
-  role_permissions: new Set(['updated_at']),
-  user_roles: new Set(['updated_at']),
-  plan_modules: new Set(['updated_at']),
+  permissions: new Set(['updated_at', 'deleted_at', 'deletedAt']),
+  module_definitions: new Set(['updated_at', 'deleted_at', 'deletedAt']),
+  tenant_modules: new Set(['updated_at', 'deleted_at', 'deletedAt']),
+  role_permissions: new Set(['updated_at', 'deleted_at', 'deletedAt']),
+  user_roles: new Set(['updated_at', 'deleted_at', 'deletedAt']),
+  plan_modules: new Set(['updated_at', 'deleted_at', 'deletedAt']),
   products: new Set(['variants']),
   loans: new Set(['repayments', 'installments']),
   invoices: new Set(['items', 'deliveryOrders', 'payments', 'returns', 'auditLogs']),
