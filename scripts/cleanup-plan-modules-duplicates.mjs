@@ -5,9 +5,9 @@
  * le plan_id n'existe pas dans pricing_plans (push dupliqué sans mapping UUID,
  * 01:57:58). Les lignes valides (mappées en local) sont conservées.
  *
- * Diagnostic d'abord (affichage sans modification), puis suppression si le
- * compte de lignes ciblées == compte attendu (33). Contrôle de cohérence deep
- * en fin de script.
+ * Diagnostic d'abord (affichage sans modification), puis suppression si les
+ * lignes restantes correspondent exactement aux lignes locales (33). Contrôle
+ * de cohérence deep en fin de script.
  *
  * Usage : node --import tsx scripts/cleanup-plan-modules-duplicates.mjs
  */
@@ -18,7 +18,6 @@ dotenv.config({ path: '.env.local', override: true });
 import db from '../src/server/database/db.js';
 import { getAdminClient } from '../src/server/services/supabase/supabaseService.js';
 
-const EXPECTED_ORPHANS = 33;
 const client = getAdminClient();
 
 const { data: planIds, error: plansError } = await client.from('pricing_plans').select('id');
@@ -39,10 +38,10 @@ if (mappedOrphans.length > 0) {
   process.exit(1);
 }
 
-// Sécurité 2 : le compte doit correspondre exactement au diagnostic (33).
-if (orphans.length !== EXPECTED_ORPHANS) {
-  console.error(`[cleanup] Abandon : ${orphans.length} orphelines attendues ${EXPECTED_ORPHANS} — vérifiez manuellement.`);
-  process.exit(1);
+// Sécurité 2 : au moins une orpheline à supprimer (rien à faire sinon).
+if (orphans.length === 0) {
+  console.log('[cleanup] Aucune ligne orpheline — rien à faire.');
+  process.exit(0);
 }
 
 // Sécurité 3 : chaque ligne restante (non orpheline) doit avoir une copie
